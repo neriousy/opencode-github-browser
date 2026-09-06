@@ -22,57 +22,27 @@ const it = testEffect(layer)
 const item = reference("https://github.com/owner/repo/issues/1")
 const initial = { items: [item], selected: item.url, note: "" }
 
-testEffect(Layer.empty)("old MCP lists do not restore or merge into explicit browser navigation", () =>
-  Effect.gen(function* () {
-    const data = storage()
-    data.values.set("view/ses_mcp", {
-      feed: { ...initial, note: "MCP results · is:open", revision: 17 },
-      cache: [item],
-      observed: [item],
-    })
-    const services = yield* Layer.build(FeedStore.layer.pipe(Layer.provide(Layer.succeed(FeedStorage)(data))))
-    const store = yield* Effect.service(FeedStore).pipe(Effect.provideContext(services))
-    expect(yield* store.current("ses_mcp")).toBeNull()
-    expect(yield* store.reference("ses_mcp", item.url)).toEqual(item)
-    const opened = reference("https://github.com/owner/repo/issues/99")
-    const next = yield* store.update(
-      "ses_mcp",
-      ({ feed }) => {
-        expect(feed).toBeNull()
-        return { items: [opened], selected: opened.url, note: "GitHub" }
-      },
-      true,
-    )
-    expect(next?.items).toEqual([opened])
-    expect(next?.revision).toBe(18)
-    expect(next?.navigation).toBe(18)
-    expect(yield* store.current("ses_mcp")).toEqual(next)
-  }),
-)
-
 testEffect(Layer.empty)("existing repository searches and explicit pins still restore", () =>
   Effect.gen(function* () {
     const data = storage()
     const feed: Feed = {
       ...initial,
       search: { query: "repo:owner/repo is:open", kind: "issue", page: 2, total: 342, incomplete: false },
-      shortlist: { items: [item], note: "MCP results · bug" },
       revision: 12,
     }
     const pinned = { ...initial, note: "Pinned GitHub reference" }
-    data.values.set("view/ses_search", { feed, cache: [item], observed: [item] })
-    data.values.set("view/ses_pin", { feed: pinned, cache: [item] })
+    data.values.set("browser.v2/ses_search", { feed, pinned: null })
+    data.values.set("browser.v2/ses_pin", { feed: pinned, pinned: item })
     const services = yield* Layer.build(FeedStore.layer.pipe(Layer.provide(Layer.succeed(FeedStorage)(data))))
     const store = yield* Effect.service(FeedStore).pipe(Effect.provideContext(services))
     expect(yield* store.current("ses_search")).toEqual(feed)
     expect(yield* store.current("ses_pin")).toEqual(pinned)
     const next = yield* store.update("ses_search", () => ({ ...initial, search: feed.search }))
-    expect(next?.shortlist).toBeUndefined()
     expect(next?.revision).toBe(13)
   }),
 )
 
-it("serializes concurrent writers without losing cached items or revisions", () =>
+it("serializes concurrent view updates and preserves an explicit pin without archiving browsed items", () =>
   Effect.gen(function* () {
     const store = yield* FeedStore
     yield* Effect.forEach(
@@ -87,19 +57,22 @@ it("serializes concurrent writers without losing cached items or revisions", () 
     const result = yield* store.current("ses_one")
     expect(result?.items.length).toBe(40)
     expect(result?.revision).toBe(40)
+    const pinned = reference("https://github.com/owner/repo/issues/21")
     yield* store.update(
       "ses_one",
-      ({ cache }) => {
-        expect(cache.length).toBe(40)
-        return { ...initial, items: [cache[20]] }
+      ({ feed }) => {
+        expect(feed?.items.length).toBe(40)
+        return { ...initial, items: [pinned] }
       },
-      true,
+      { reveal: true, pin: pinned },
     )
-    yield* store.update("ses_one", ({ cache }) => {
-      expect(cache.length).toBe(40)
-      return { ...initial, items: [cache[30]] }
+    yield* store.update("ses_one", (snapshot) => {
+      expect(snapshot).toEqual({ feed: { ...initial, items: [pinned], revision: 41, navigation: 41 }, pinned })
+      return { ...initial, items: [item] }
     })
     expect((yield* store.current("ses_one"))?.navigation).toBe(41)
+    expect(yield* store.reference("ses_one", pinned.url)).toEqual(pinned)
+    expect(yield* store.reference("ses_one", item.url)).toBeUndefined()
   }))
 
 it("a failed change does not poison the next writer", () =>
@@ -115,19 +88,6 @@ it("a failed change does not poison the next writer", () =>
     expect((yield* store.current("ses_one"))?.revision).toBe(1)
   }))
 
-const legacy = storage()
-legacy.values.set("session/ses_legacy", initial)
-testEffect(FeedStore.layer.pipe(Layer.provide(Layer.succeed(FeedStorage)(legacy))))(
-  "restores legacy storage and migrates it on the next write",
-  () =>
-    Effect.gen(function* () {
-      const store = yield* FeedStore
-      expect((yield* store.current("ses_legacy"))?.selected).toBe(item.url)
-      yield* store.update("ses_legacy", ({ cache }) => ({ ...initial, items: cache }))
-      expect(legacy.values.has("view/ses_legacy")).toBe(true)
-    }),
-)
-
 testEffect(Layer.empty)("cancels a queued writer, releases its lock, and keeps other sessions independent", () =>
   Effect.gen(function* () {
     const entered = yield* Deferred.make<void>()
@@ -139,7 +99,7 @@ testEffect(Layer.empty)("cancels a queued writer, releases its lock, and keeps o
           Layer.succeed(FeedStorage)({
             ...data,
             get: (key) =>
-              key === "view/ses_blocked"
+              key === "browser.v2/ses_blocked"
                 ? Deferred.succeed(entered, undefined).pipe(
                     Effect.andThen(Deferred.await(release)),
                     Effect.andThen(data.get(key)),

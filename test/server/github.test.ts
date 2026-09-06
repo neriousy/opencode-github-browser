@@ -31,8 +31,7 @@ testEffect(
   Effect.gen(function* () {
     const github = yield* GitHubClient
     const result = yield* github.read(url, "diff")
-    expect(result.result.output).toHaveLength(2)
-    expect(result.input.method).toBe("get_files")
+    expect(result).toHaveLength(2)
   }),
 )
 

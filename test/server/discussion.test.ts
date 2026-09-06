@@ -46,7 +46,7 @@ it("conversation context survives browsing away, uses fresh comments, and resolv
   Effect.gen(function* () {
     const store = yield* FeedStore
     const source = session({ "github-browser.reference": item.url.replace("/pull/", "/issues/") })
-    yield* store.update(sessionID, () => ({ items: [item], selected: item.url, note: "" }))
+    yield* store.update(sessionID, () => ({ items: [item], selected: item.url, note: "" }), { pin: item })
     const first = yield* discussionContext(source, sessionID)
     expect(first).toContain(item.body)
     expect(first).toContain(item.url)
@@ -69,10 +69,10 @@ it("conversation context survives browsing away, uses fresh comments, and resolv
     expect(yield* store.current(sessionID)).toEqual(before)
   }))
 
-it("ordinary browser sessions never inject context, and sessions cannot read each other's item cache", () =>
+it("ordinary browser sessions never inject context, and pinned context is isolated by session", () =>
   Effect.gen(function* () {
     const store = yield* FeedStore
-    yield* store.update(sessionID, () => ({ items: [item], selected: item.url, note: "" }))
+    yield* store.update(sessionID, () => ({ items: [item], selected: item.url, note: "" }), { pin: item })
     expect(yield* discussionContext(session(), sessionID)).toBeUndefined()
     expect(yield* discussionContext(session({ "github-browser.reference": 42 }), sessionID)).toBeUndefined()
     const other = yield* discussionContext(

@@ -34,7 +34,8 @@ for (const loaded of [true, false]) {
                 ...source,
               },
             })
-          if (path.endsWith("/pin") || path.endsWith("/read"))
+          if (path.endsWith("/read")) return Response.json({ output: { part: "details", item } })
+          if (path.endsWith("/pin") || path.endsWith("/saveRead"))
             return Response.json({ output: { items: [item], selected: item.url, note: "" } })
           throw new Error(`Unexpected request: ${path}`)
         },
@@ -52,11 +53,11 @@ for (const loaded of [true, false]) {
       },
     })
     expect(requests.map((request) => request.path.split("/").at(-1))).toEqual(
-      loaded ? ["session", "pin"] : ["session", "pin", "read"],
+      loaded ? ["session", "pin"] : ["session", "pin", "read", "saveRead"],
     )
     expect(result.feed.items[0].body).toBe(item.body)
     expect(result.session.model).toEqual(source.model)
     // No prompt, synthetic, agent/model-switch or generation endpoints are called before the user types.
-    expect(requests).toHaveLength(loaded ? 2 : 3)
+    expect(requests).toHaveLength(loaded ? 2 : 4)
   })
 }

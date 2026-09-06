@@ -39,6 +39,5 @@ export function reference(value: string): Item {
     comments: [],
     commentsLoaded: false,
     files: null,
-    reason: "",
   }
 }

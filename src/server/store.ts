@@ -3,12 +3,10 @@ import { Context, Effect, Layer, RcMap, Schema, Semaphore } from "effect"
 import { Feed, Item } from "../shared/rpc"
 import { ViewError } from "./errors"
 import { githubURL } from "../shared/url"
-import { isLegacyMcpFeed } from "../shared/feed"
 
 const Snapshot = Schema.Struct({
   feed: Schema.NullOr(Feed),
-  cache: Schema.Array(Item),
-  observed: Schema.optional(Schema.Array(Item)),
+  pinned: Schema.NullOr(Item),
 })
 export type Snapshot = typeof Snapshot.Type
 
@@ -22,11 +20,8 @@ export class FeedStore extends Context.Service<FeedStore>()("github-browser/Feed
     const locks = yield* RcMap.make({ lookup: (_sessionID: string) => Semaphore.make(1) })
     const load = Effect.fn("FeedStore.load")(
       function* (sessionID: string) {
-        const stored = yield* storage.get(`view/${sessionID}`)
-        if (stored !== undefined) return yield* Schema.decodeUnknownEffect(Snapshot)(stored)
-        const old = yield* storage.get(`session/${sessionID}`)
-        const feed = old === undefined ? null : yield* Schema.decodeUnknownEffect(Schema.NullOr(Feed))(old)
-        return { feed, cache: feed?.items ?? [], observed: feed?.items ?? [] }
+        const stored = yield* storage.get(`browser.v2/${sessionID}`)
+        return stored === undefined ? { feed: null, pinned: null } : yield* Schema.decodeUnknownEffect(Snapshot)(stored)
       },
       Effect.mapError(() => new ViewError({ message: "The saved GitHub view could not be read." })),
     )
@@ -42,14 +37,11 @@ export class FeedStore extends Context.Service<FeedStore>()("github-browser/Feed
         Effect.mapError(() => new ViewError({ message: "The GitHub view could not be saved." })),
       )
       // Complete the small durable commit once admitted; waiting and network reads remain interruptible.
-      yield* storage.set(`view/${sessionID}`, encoded).pipe(Effect.uninterruptible)
+      yield* storage.set(`browser.v2/${sessionID}`, encoded).pipe(Effect.uninterruptible)
     })
     return {
       current: Effect.fn("FeedStore.current")((sessionID: string) =>
-        locked(
-          sessionID,
-          load(sessionID).pipe(Effect.map(({ feed }) => (feed && !isLegacyMcpFeed(feed) ? feed : null))),
-        ),
+        locked(sessionID, load(sessionID).pipe(Effect.map(({ feed }) => feed))),
       ),
       reference: Effect.fn("FeedStore.reference")(function* (sessionID: string, url: string) {
         const identity = githubURL(url)
@@ -57,38 +49,40 @@ export class FeedStore extends Context.Service<FeedStore>()("github-browser/Feed
         return yield* locked(
           sessionID,
           load(sessionID).pipe(
-            Effect.map((snapshot) =>
-              [...(snapshot.feed?.items ?? []), ...snapshot.cache, ...(snapshot.observed ?? [])].find(
-                (item) => item.repository === identity.repository && item.number === identity.number,
-              ),
+            Effect.map(({ pinned }) =>
+              pinned?.repository === identity.repository && pinned.number === identity.number ? pinned : undefined,
             ),
           ),
         )
       }),
       update: Effect.fn("FeedStore.update")(
-        (sessionID: string, change: (snapshot: Snapshot) => Feed | ViewError | null, reveal = false) =>
+        (
+          sessionID: string,
+          change: (snapshot: Snapshot) => Feed | ViewError | null,
+          options: { reveal?: boolean; pin?: typeof Item.Type } = {},
+        ) =>
           locked(
             sessionID,
             Effect.gen(function* () {
               const snapshot = yield* load(sessionID)
-              const changed = change({
-                ...snapshot,
-                feed: snapshot.feed && isLegacyMcpFeed(snapshot.feed) ? null : snapshot.feed,
-              })
+              const changed = change(snapshot)
               if (changed instanceof ViewError) return yield* changed
               if (!changed) return null
               const revision = (snapshot.feed?.revision ?? 0) + 1
               const feed: Feed = {
                 ...changed,
                 revision,
-                navigation: reveal ? revision : (snapshot.feed?.navigation ?? 0),
+                navigation: options.reveal ? revision : (snapshot.feed?.navigation ?? 0),
               }
-              const cache = [
-                ...new Map(
-                  [...snapshot.cache, ...feed.items].map((item) => [`${item.repository}:${item.number}`, item]),
-                ).values(),
-              ]
-              yield* save(sessionID, { ...snapshot, feed, cache })
+              const pinned = options.pin ?? snapshot.pinned
+              yield* save(sessionID, {
+                feed,
+                pinned: pinned
+                  ? (feed.items.find(
+                      (item) => item.repository === pinned.repository && item.number === pinned.number,
+                    ) ?? pinned)
+                  : null,
+              })
               return feed
             }),
           ),

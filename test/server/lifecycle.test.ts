@@ -19,13 +19,13 @@ testEffect(Layer.empty)("registrations remain alive after activation and are dis
       body: "Description reaches the model request",
       bodyLoaded: true,
     }
-    values.set("view/ses_mcp", {
+    values.set("browser.v2/ses_item", {
       feed: { items: [item], selected: item.url, note: "Pinned GitHub reference" },
-      cache: [item],
+      pinned: item,
     })
     const contextCallbacks: Effect.Effect<void>[] = []
     const context: SessionContext = {
-      sessionID: Session.ID.make("ses_mcp"),
+      sessionID: Session.ID.make("ses_item"),
       agent: Agent.ID.make("build"),
       model: Schema.decodeUnknownSync(Model.Ref)({ providerID: "fixture", id: "model" }),
       system: [{ type: "text", text: "Host instructions" }],
@@ -88,7 +88,7 @@ testEffect(Layer.empty)("registrations remain alive after activation and are dis
     }).pipe(Scope.provide(scope))
     expect([...active]).toEqual(["rpc", "context"])
     expect(notifications).toEqual([])
-    expect(values.has("view/ses_mcp")).toBe(true)
+    expect(values.has("browser.v2/ses_item")).toBe(true)
     expect(context.system).toEqual([{ type: "text", text: "Host instructions" }])
     yield* Effect.all(contextCallbacks)
     expect(context.system).toHaveLength(2)

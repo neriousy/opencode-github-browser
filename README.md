@@ -1,8 +1,8 @@
 # OpenCode GitHub Browser
 
-A GitHub reader inside OpenCode 2. Search issues and pull requests, follow links, read descriptions and discussions, and inspect diffs without leaving the TUI or starting a model turn. The agent can also use **GitHub MCP** to fetch results or help with an item.
+A GitHub reader inside OpenCode 2. Search issues and pull requests, follow links, read descriptions and discussions, and inspect diffs without leaving the TUI or starting a model turn.
 
-Browser search, details, discussion comments, and changed files load directly through **GitHub CLI (`gh`)** on the OpenCode server. These are read-only requests using `gh`'s existing authentication, without a model turn. Chat mentions and MCP results do not populate the browser. Press **t** to open a conversation about an item, then type in OpenCode's normal prompt.
+Browser search, details, discussion comments, and changed files load directly through **GitHub CLI (`gh`)** on the OpenCode server. These are read-only requests using `gh`'s existing authentication, without a model turn. Chat mentions and agent tool results never populate the browser or its caches. Press **t** to open a conversation about an item, then type in OpenCode's normal prompt.
 
 ## Install locally
 
@@ -26,21 +26,15 @@ Add this repository's absolute path to the global `~/.config/opencode/opencode.j
 
 Alternatively, symlink the repository into `~/.config/opencode/plugins/github-browser` for automatic discovery. The package supplies both server and TUI entrypoints; it does not need a separate `cli.json` entry. Restart the background server with `opencode2 service restart`, then reopen the TUI if either was running before installation. Local source edits also require a restart in this beta: Bun caches imported plugin modules.
 
-GitHub MCP can be configured separately for agent search and actions. The browser does not observe its tool calls and does not require an MCP server. Direct reads use `gh` authentication.
-
 ## Use it
 
-Run `/github` while working in a project. A fresh panel automatically loads open issues from that project’s GitHub repository, resolved by `gh` in the server’s project directory (including worktrees). Switch to **PRs** to fetch its pull requests. **Issues** and **PRs** use repository results with normal pagination, independently of the conversation. Existing browser searches are restored; old MCP-populated lists fall back to the repository's issues. Press `i` for **Current repository issues** to return to the default list.
+Run `/github` while working in a project. A fresh panel automatically loads open issues from that project’s GitHub repository, resolved by `gh` in the server’s project directory (including worktrees). Switch to **PRs** to fetch its pull requests. **Issues** and **PRs** use repository results with normal pagination, independently of the conversation. Existing browser searches are restored. Press `i` for **Current repository issues** to return to the default list.
 
 Click a rendered `github.com` issue or PR link in the conversation or the browser's Markdown to open it in the current GitHub panel. Links between items stay in the panel, with Back history. You can also paste a link with `/github https://github.com/owner/repo/issues/123`, or press `o` inside the browser. Outside a session, opening a link creates a GitHub session.
 
-Or ask the agent, for example:
-
-> Use GitHub MCP to find three small open bugs in this repository.
-
 For direct search, click **/ search** or press `/` inside the focused panel and enter words or GitHub filters, such as `is:open label:bug`. Searches automatically use the current project’s repository. An explicit `repo:`, `org:`, or `user:` overrides that scope. The current Issues/PRs filter applies to the query; switching tabs runs the corresponding search. If no GitHub repository can be resolved, the panel explains how to search another repository or open a URL; it does not silently search all of GitHub. Results load 50 at a time; `m` loads the next page. A new search replaces the visible results while retaining previously fetched items in the cache. GitHub exposes at most 1,000 results for a search; narrow broad queries with repository, state, or label qualifiers.
 
-`/github` (or `/issues`) opens and focuses the panel. The command palette also contains **Open GitHub browser**. Mentioning an issue in chat or reading it through MCP does not change the list. Click an issue/PR link to explicitly open that item. Refreshes preserve focus and fullscreen presentation.
+`/github` (or `/issues`) opens and focuses the panel. The command palette also contains **Open GitHub browser**. Mentioning an issue in chat does not change the list or fetch its data. Click an issue/PR link to explicitly open that item. Refreshes preserve focus and fullscreen presentation.
 
 | Interaction                      | Action                                                       |
 | -------------------------------- | ------------------------------------------------------------ |
@@ -67,7 +61,7 @@ For direct search, click **/ search** or press `/` inside the focused panel and 
 
 When inactive, the footer shows how to focus GitHub; its letter, arrow, and paging shortcuts are disabled. Use OpenCode's pane-focus shortcuts (shown using your configured bindings), click the pane, or run `/github`. The host may use the first click on an inactive pane solely to focus it. Opening an item conversation focuses the normal prompt, with the reference alongside it when the terminal is wide enough.
 
-Results use two lines per item, with an ellipsis on long titles and compact metadata. The highlighted row expands to show its full title; selecting another row collapses it again. A shared repository is shown once in the header. Recommendation reasons appear in the detail view; `?` exposes the full set of available actions.
+Results use two lines per item, with an ellipsis on long titles and compact metadata. The highlighted row expands to show its full title; selecting another row collapses it again. A shared repository is shown once in the header. Press `?` for the full set of available actions.
 
 Opening or previewing an item shows cached data immediately and automatically loads missing details. Loading uses a reserved status row with a small animated spinner, so it cannot overlap results or move the list. Existing results and descriptions stay readable during refresh. Authentication/network errors appear in the panel; press `r` to retry the failed request or Escape to cancel a pending load. Missing CLI, sign-in, timeout, rate-limit, and inaccessible-item errors include an actionable message. Failed diff loads return to usable details. Local filters can be cleared with `x`; the header shows matching results and the search total. Back restores the previous item or result selection and scroll position. Navigation and filters are remembered per session for this TUI's lifetime. Opening a dedicated tab pins the reference without starting a model request; reopening an already-open item focuses its tab. Enable tabs in OpenCode settings for the tab strip. Narrow terminals use the host's fullscreen panel presentation.
 
@@ -89,17 +83,21 @@ Descriptions and comments render Markdown headings, emphasis, task lists, nested
 
 ## Item conversations
 
-The browser uses direct GitHub reads and does not register agent tools or MCP observers. Per-session serialization and monotonic revisions preserve updates, and durable storage restores the latest browser view.
+The browser uses direct GitHub reads. Per-session serialization and monotonic revisions preserve updates, and durable storage restores the latest browser view.
 
 The actions dialog groups available commands under **Browse**, **Item**, and **View**. **Open conversation about this item** (`t`) opens or focuses a dedicated session with the issue/PR pinned. New conversations inherit the originating session's agent and model, including its model variant. Opening a conversation leaves it idle: no prompt or synthetic message is queued. Type normally to discuss, implement, or review the item.
 
-Dedicated conversations carry the reference URL in session metadata. A server-side context hook supplies the cached description and loaded comments when a model request actually runs. This keeps context out of the pending inbox and chat transcript, retains it across plugin restarts, and picks up refreshed details and comments. Browsing related items does not change which reference the conversation is about. Ordinary browsing sessions receive no added model context.
+Dedicated conversations carry the reference URL in session metadata. A server-side context hook supplies the pinned description and loaded comments when a model request actually runs. This keeps context out of the pending inbox and chat transcript, retains it across plugin restarts, and picks up refreshed details and comments. Browsing related items does not change which reference the conversation is about. Ordinary browsing sessions receive no added model context.
 
 ### Caching and refresh
 
+The TUI uses **TanStack Query Core** for resource caching, concurrent request sharing, and infinite search pagination. Results stay fresh for one minute and unused queries are collected after five minutes. Returning to a fresh search restores its loaded pages. Query keys include the server location, search scope, item, and requested part. The query client lives for the TUI plugin's lifetime and is cleared on unload.
+
+Only explicit browsing actions fetch data. Pure search/read RPCs never save session state or emit navigation events; separate save operations persist results after the user requests them. Background cache activity cannot navigate the pane or populate conversation context. Escape/Back detaches the caller and aborts the underlying request when no other pane needs it. Refresh bypasses both the TUI and server response caches. The terminal uses Query Core directly because the Solid web adapter detects Bun as an SSR environment.
+
 Successful GitHub responses are cached for one minute in the server plugin instance, with up to 128 entries. Repository detection is cached for five minutes. Identical concurrent reads reuse the completed response; different queries, pages, kinds, and project directories remain separate. Failed requests are not retained. Canceling a request interrupts its CLI operation.
 
-Session views and item details are also saved durably, so reopening a panel can show its previous contents immediately. The request cache expires naturally and is cleared when the server plugin reloads. Press `l` to bypass it and refresh the current list or details; refreshing a list starts at page one. Existing content remains visible if a refresh fails.
+The server persists only the latest browser view and an explicitly pinned conversation item. It does not archive every browsed item in a second per-session cache. Reopening a panel restores its previous contents; TanStack retains recently loaded searches and item parts for reuse. Browser state uses a fresh storage namespace, so old automatically collected data is not restored. Press `l` to refresh the current list or details; refreshing a list starts at page one. Existing content remains visible if a refresh fails.
 
 ## Development
 
@@ -129,10 +127,12 @@ Server and TUI modules depend on shared contracts; shared code does not depend o
 
 - `src/server/github.ts`: `GhCommand` owns the interruptible CLI boundary; `GitHubClient` owns read/search operations and response validation.
 - `src/server/images.ts`: authenticated attachment downloads, bounded image caching, and cancellation.
-- `src/server/store.ts`: `FeedStorage` adapts host storage; `FeedStore` uses scoped per-session semaphores to serialize reads/writes and maintain revisions. Existing snapshots and legacy session feeds remain readable.
+- `src/server/store.ts`: `FeedStorage` adapts host storage; `FeedStore` uses scoped per-session semaphores to serialize reads/writes and maintain revisions. Browser-only snapshots use the `browser.v2/` storage namespace.
 - `src/server/index.ts`: builds layers in the host scope, registers RPC and the conversation context hook, and maps typed failures to RPC errors. Event delivery failures are logged after the durable view is saved.
-- `src/shared/rpc.ts`: Effect Schema contracts exposed through plain Standard Schema adapters. Native schema ASTs stay in the plugin runtime; the adapters also provide JSON Schema for agent tools. No separate Zod model is needed.
-- `src/server/observe.ts`: pure normalization of GitHub response envelopes.
+- `src/shared/rpc.ts`: Effect Schema contracts exposed through plain Standard Schema adapters, including resource reads and explicit view saves. Native schema ASTs stay in the plugin runtime.
+- `src/server/reader.ts`: validates GitHub REST responses and returns session-independent resources.
+- `src/server/view.ts`: merges explicitly requested resources into the durable browser view.
+- `src/tui/query.ts`: TanStack query keys, cache policy, infinite pagination, and cancellation ownership.
 - `src/tui/index.tsx`, `src/tui/browser.tsx`, `src/tui/diff.tsx`: Solid navigation and rendering. `src/tui/links.ts` isolates the link-click compatibility adapter.
 
 Tests exercise the actual services, shared schemas, activation lifetime, and reader components at 45 and 110 columns. They use local fixtures and do not call GitHub or start model requests. Renderer captures are written to the ignored `captures/` directory.

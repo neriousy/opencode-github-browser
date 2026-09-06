@@ -35,12 +35,8 @@ export const Item = Schema.Struct({
   ),
   commentsLoaded: Schema.Boolean,
   files: Schema.NullOr(Schema.Array(DiffFile)),
-  reason: Schema.String,
 })
 export type Item = typeof Item.Type
-
-// Retained for decoding durable views from versions that displayed MCP shortlists.
-const Shortlist = Schema.Struct({ items: Schema.Array(Item), note: Schema.String })
 
 export const Feed = Schema.Struct({
   revision: Schema.optional(Nonnegative),
@@ -48,7 +44,6 @@ export const Feed = Schema.Struct({
   items: Schema.Array(Item),
   selected: Schema.NullOr(Schema.String),
   note: Schema.String,
-  shortlist: Schema.optional(Shortlist),
   search: Schema.optional(
     Schema.Struct({
       query: Schema.String,
@@ -61,6 +56,23 @@ export const Feed = Schema.Struct({
   ),
 })
 export type Feed = typeof Feed.Type
+
+export const SearchPage = Schema.Struct({
+  items: Schema.Array(Item),
+  query: Schema.String,
+  kind: Kind,
+  page: Positive,
+  total: Nonnegative,
+  incomplete: Schema.Boolean,
+})
+export type SearchPage = typeof SearchPage.Type
+
+export const ReadResult = Schema.Union([
+  Schema.Struct({ part: Schema.Literal("details"), item: Item }),
+  Schema.Struct({ part: Schema.Literal("comments"), url: URLString, comments: Item.fields.comments }),
+  Schema.Struct({ part: Schema.Literal("diff"), url: URLString, files: Schema.Array(DiffFile) }),
+])
+export type ReadResult = typeof ReadResult.Type
 
 const Session = { sessionID: Schema.String.check(Schema.isPattern(/^ses_/)) }
 // Keep host decoding behind Standard Schema: native ASTs are tied to their Effect runtime.
@@ -98,7 +110,6 @@ export const GitHub = Rpc.define({
     search: {
       input: portable(
         Schema.Struct({
-          ...Session,
           refresh: Schema.optional(Schema.Boolean),
           query: Schema.Trim.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
           kind: Kind.pipe(Schema.withDecodingDefault(Effect.succeed("all"))),
@@ -107,12 +118,27 @@ export const GitHub = Rpc.define({
           ),
         }),
       ),
-      output: portable(Feed),
+      output: portable(SearchPage),
       errors,
     },
     read: {
+      input: portable(Schema.Struct({ url: URLString, part: Part, refresh: Schema.optional(Schema.Boolean) })),
+      output: portable(ReadResult),
+      errors,
+    },
+    saveRead: {
+      input: portable(Schema.Struct({ ...Session, result: ReadResult })),
+      output: portable(Feed),
+      errors,
+    },
+    saveSearch: {
       input: portable(
-        Schema.Struct({ ...Session, url: URLString, part: Part, refresh: Schema.optional(Schema.Boolean) }),
+        Schema.Struct({
+          ...Session,
+          text: Schema.String,
+          pages: Schema.Array(SearchPage).check(Schema.isMinLength(1)),
+          navigate: Schema.Boolean,
+        }),
       ),
       output: portable(Feed),
       errors,

@@ -17,8 +17,8 @@ export async function createIssueSession(
     metadata: { "github-browser.reference": item.url },
   })
   const pinned = await client.rpc(GitHub).pin({ sessionID: session.id, item }, { location })
-  const feed = item.bodyLoaded
-    ? pinned
-    : await client.rpc(GitHub).read({ sessionID: session.id, url: item.url, part: "details" }, { location })
+  if (item.bodyLoaded) return { session, feed: pinned }
+  const result = await client.rpc(GitHub).read({ url: item.url, part: "details" }, { location })
+  const feed = await client.rpc(GitHub).saveRead({ sessionID: session.id, result }, { location })
   return { session, feed }
 }

@@ -15,7 +15,7 @@
   "dependencies": {
     "@opencode-ai/plugin": "0.0.0-beta-19157",
     "@opencode-ai/schema": "0.0.0-beta-19157",
-    "diff": "^8.0.4",
+    "@tanstack/query-core": "5.102.8",
     "effect": "4.0.0-rc.112",
     "marked": "17.0.1",
     "string-width": "7.2.0"

@@ -5,13 +5,16 @@ import type { KeymapLayer } from "@opencode-ai/plugin/tui/context"
 import { testRender } from "@opentui/solid"
 import { BoxRenderable, ImageRenderable, Renderable, TextRenderable, TextAttributes } from "@opentui/core"
 import { createSignal } from "solid-js"
-import { Option, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { createStore, produce } from "solid-js/store"
 import { Browser } from "../../src/tui/browser"
 import type { BrowserHost } from "../../src/tui/context"
-import { Kind, type Feed } from "../../src/shared/rpc"
+import { Kind, ReadResult, SearchPage, type Feed } from "../../src/shared/rpc"
+import { FeedStore, FeedStorage } from "../../src/server/store"
+import { readView, searchView } from "../../src/server/view"
 import { reference } from "../../src/shared/url"
 import { linkAt, registerLinks } from "../../src/tui/links"
+import { browserQueries, createQueryClient } from "../../src/tui/query"
 
 function fixture(
   feed: Feed,
@@ -25,9 +28,49 @@ function fixture(
   const navigated: string[] = []
   const synced: string[] = []
   const openedTabs: string[] = []
+  const values = new Map<string, Schema.Json>()
+  const storage = Layer.succeed(FeedStorage)({
+    get: (key) => Effect.sync(() => values.get(key) ?? { feed, pinned: null }),
+    set: (key, value) =>
+      Effect.sync(() => {
+        values.set(key, value)
+      }),
+  })
+  const save = async (request: Request) => {
+    const method = new URL(request.url).pathname.split("/").at(-1)
+    if (method !== "saveRead" && method !== "saveSearch") return response(request)
+    const input = await request.json()
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* FeedStore
+          if (method === "saveRead") {
+            const { input: data } = Schema.decodeUnknownSync(
+              Schema.Struct({ input: Schema.Struct({ sessionID: Schema.String, result: ReadResult }) }),
+            )(input)
+            return yield* store.update(data.sessionID, (snapshot) => readView(snapshot, data.result))
+          }
+          const { input: data } = Schema.decodeUnknownSync(
+            Schema.Struct({
+              input: Schema.Struct({
+                sessionID: Schema.String,
+                pages: Schema.Array(SearchPage),
+                text: Schema.String,
+                navigate: Schema.Boolean,
+              }),
+            }),
+          )(input)
+          return yield* store.update(data.sessionID, (snapshot) => searchView(snapshot, data.pages, data.text), {
+            reveal: data.navigate,
+          })
+        }).pipe(Effect.provide(FeedStore.layer), Effect.provide(storage)),
+      ),
+    )
+    return Response.json({ output: result })
+  }
   const client = OpenCode.make({
     baseUrl: "http://fixture.invalid",
-    fetch: Object.assign((input: string | URL | Request, init?: RequestInit) => response(new Request(input, init)), {
+    fetch: Object.assign((input: string | URL | Request, init?: RequestInit) => save(new Request(input, init)), {
       preconnect: () => {},
     }),
   })
@@ -90,6 +133,7 @@ function fixture(
   }
   return {
     context,
+    values,
     prompts,
     choices,
     menus,
@@ -298,61 +342,56 @@ test("clicking a discussion reference and the keyboard picker preserve the Back 
   }
 })
 
-for (const origin of ["repository", "legacy MCP"]) {
-  test(`an explicit chat link opens details from a ${origin} response`, async () => {
-    const initial: Feed = {
-      items: [issue],
-      selected: null,
-      note: "GitHub search · repo:owner/repo is:open",
-      revision: 1,
-      navigation: 1,
-      search: { query: "repo:owner/repo is:open", kind: "issue", page: 1, total: 1, incomplete: false },
-    }
-    const [state, setState] = createStore({ feed: initial })
-    const opened: Feed =
-      origin === "repository"
-        ? { ...initial, selected: issue.url, note: "GitHub", revision: 2, navigation: 2 }
-        : { items: [issue], selected: issue.url, note: "GitHub MCP", revision: 2, navigation: 2 }
-    const app = fixture(initial)
-    const rendered = await testRender(
-      () => (
-        <Browser
-          context={app.context}
-          sessionID="ses_link"
-          feed={state.feed}
-          focused
-          width={80}
-          close={() => {}}
-          openURL={async () => {}}
-          openTab={async () => {}}
-        />
-      ),
-      { width: 80, height: 24 },
+test("an explicit chat link opens details from repository results", async () => {
+  const initial: Feed = {
+    items: [issue],
+    selected: null,
+    note: "GitHub search · repo:owner/repo is:open",
+    revision: 1,
+    navigation: 1,
+    search: { query: "repo:owner/repo is:open", kind: "issue", page: 1, total: 1, incomplete: false },
+  }
+  const [state, setState] = createStore({ feed: initial })
+  const opened: Feed = { ...initial, selected: issue.url, note: "GitHub", revision: 2, navigation: 2 }
+  const app = fixture(initial)
+  const rendered = await testRender(
+    () => (
+      <Browser
+        context={app.context}
+        sessionID="ses_link"
+        feed={state.feed}
+        focused
+        width={80}
+        close={() => {}}
+        openURL={async () => {}}
+        openTab={async () => {}}
+      />
+    ),
+    { width: 80, height: 24 },
+  )
+  try {
+    await rendered.waitForVisualIdle()
+    setState(
+      produce((draft) => {
+        draft.feed = opened
+      }),
     )
-    try {
-      await rendered.waitForVisualIdle()
-      setState(
-        produce((draft) => {
-          draft.feed = opened
-        }),
-      )
-      await rendered.renderOnce()
-      expect(rendered.captureCharFrame()).toContain(issue.body)
-      await app.key("escape")
-      await rendered.renderOnce()
-      expect(rendered.captureCharFrame()).not.toContain(issue.body)
-      setState(
-        produce((draft) => {
-          draft.feed = { ...opened, revision: 3, navigation: 3 }
-        }),
-      )
-      await rendered.renderOnce()
-      expect(rendered.captureCharFrame()).toContain(issue.body)
-    } finally {
-      rendered.renderer.destroy()
-    }
-  })
-}
+    await rendered.renderOnce()
+    expect(rendered.captureCharFrame()).toContain(issue.body)
+    await app.key("escape")
+    await rendered.renderOnce()
+    expect(rendered.captureCharFrame()).not.toContain(issue.body)
+    setState(
+      produce((draft) => {
+        draft.feed = { ...opened, revision: 3, navigation: 3 }
+      }),
+    )
+    await rendered.renderOnce()
+    expect(rendered.captureCharFrame()).toContain(issue.body)
+  } finally {
+    rendered.renderer.destroy()
+  }
+})
 function renderedImages(node: Renderable): ImageRenderable[] {
   return node
     .getChildren()
@@ -593,7 +632,7 @@ test("opening a bare reference loads its details once and renders the descriptio
   const app = fixture(feed, async (request) => {
     requests.push(request)
     return Response.json({
-      output: { ...feed, revision: 2, items: [{ ...issue, bodyLoaded: true }], selected: issue.url },
+      output: { part: "details", item: issue },
     })
   })
   const rendered = await testRender(
@@ -638,14 +677,11 @@ test("a details read cancelled by moving on runs again when the item is reopened
         request.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }),
       )
     const item = feed.items.find((item) => item.url === input.url)
+    if (!item) throw new Error("Missing fixture item")
     return Response.json({
       output: {
-        ...feed,
-        revision: requests.length + 1,
-        items: feed.items.map((row) =>
-          row === item ? { ...row, body: `Body of #${row.number}`, bodyLoaded: true } : row,
-        ),
-        selected: input.url,
+        part: "details",
+        item: { ...item, body: `Body of #${item.number}`, bodyLoaded: true },
       },
     })
   })
@@ -678,6 +714,85 @@ test("a details read cancelled by moving on runs again when the item is reopened
   }
 })
 
+test("Escape leaves a cancelled bare reference idle until it is explicitly retried", async () => {
+  const item = reference(issue.url)
+  const feed = { items: [item], selected: item.url, note: "", revision: 1 }
+  const requests: Request[] = []
+  const app = fixture(feed, async (request) => {
+    requests.push(request)
+    if (requests.length > 1) return Response.json({ output: { part: "details", item: issue } })
+    return new Promise((_resolve, reject) =>
+      request.signal.addEventListener("abort", () => reject(new Error("Cancelled")), { once: true }),
+    )
+  })
+  const rendered = await testRender(
+    () => (
+      <Browser
+        context={app.context}
+        feed={feed}
+        sessionID="ses_cancel"
+        focused
+        width={70}
+        close={() => {}}
+        openURL={async () => {}}
+        openTab={async () => {}}
+      />
+    ),
+    { width: 70, height: 25 },
+  )
+  try {
+    await rendered.waitFor(() => requests.length === 1)
+    await app.key("escape")
+    await rendered.waitForVisualIdle()
+    expect(requests[0].signal.aborted).toBe(true)
+    expect(requests).toHaveLength(1)
+    expect(rendered.captureCharFrame()).not.toContain("esc cancel")
+    await app.key("l")
+    await rendered.waitForFrame((frame) => frame.includes(issue.body))
+    expect(requests).toHaveLength(2)
+  } finally {
+    rendered.renderer.destroy()
+  }
+})
+
+test("query cache refreshes cannot save a view or change the current selection", async () => {
+  const cache = createQueryClient()
+  const feed = { items: [issue], selected: issue.url, note: "", revision: 1, navigation: 1 }
+  const app = fixture(feed, async () => Response.json({ output: { part: "details", item: pr } }))
+  const queries = browserQueries(cache, app.context.client)
+  const rendered = await testRender(
+    () => (
+      <Browser
+        queryClient={cache}
+        context={app.context}
+        feed={feed}
+        sessionID="ses_selected"
+        focused
+        width={70}
+        close={() => {}}
+        openURL={async () => {}}
+        openTab={async () => {}}
+      />
+    ),
+    { width: 70, height: 25 },
+  )
+  try {
+    await rendered.waitForFrame((frame) => frame.includes(issue.body))
+    await queries.read({ directory: "/fixture" }, pr.url, "details", true, new AbortController().signal)
+    await rendered.waitForVisualIdle()
+    expect(cache.getQueryCache().getAll()).toHaveLength(1)
+    expect(app.values.size).toBe(0)
+    expect(rendered.captureCharFrame()).toContain(issue.body)
+    expect(rendered.captureCharFrame()).not.toContain(pr.title)
+    await app.key("escape")
+    await rendered.renderOnce()
+    expect(rendered.captureCharFrame()).not.toContain("Back to results")
+  } finally {
+    rendered.renderer.destroy()
+    cache.clear()
+  }
+})
+
 for (const width of [45, 110]) {
   test(`ten long issues fit in a compact ${width}-column pane`, async () => {
     const feed = {
@@ -687,7 +802,6 @@ for (const width of [45, 110]) {
         url: `https://github.com/owner/repo/issues/${100 + index}`,
         title: `Result ${index + 1}: A long title that should never wrap and consume the entire panel`,
         labels: ["bug", "tui", "2.0"],
-        reason: "A duplicate summary that belongs in the detail view.",
       })),
       selected: null,
       note: "Ten recently updated issues with a very long explanation that used to consume the header.",
@@ -713,17 +827,15 @@ for (const width of [45, 110]) {
       const frame = rendered.captureCharFrame()
       for (const item of feed.items) expect(frame).toContain(`#${item.number}  Result`)
       expect(frame.match(/owner\/repo/g)).toHaveLength(1)
-      expect(frame).not.toContain(" Shortlist ")
       expect(frame).not.toContain(" All ")
       expect(frame).not.toContain("GitHub · selection")
       expect(frame).toContain("10 selected")
-      expect(frame).not.toContain("duplicate summary")
       expect(frame).not.toContain("recently updated")
       expect(frame).toContain("? actions")
       await Bun.write(`captures/list-${width}.txt`, frame)
       await app.key("enter")
       await rendered.renderOnce()
-      expect(rendered.captureCharFrame()).toContain("A duplicate summary")
+      expect(rendered.captureCharFrame()).toContain(issue.body)
     } finally {
       rendered.renderer.destroy()
     }
@@ -851,15 +963,15 @@ test("a fresh panel loads current-repository issues and switches PRs through ser
     search: { query: "repo:owner/repo is:open", text: "is:open", kind: "issue", page: 1, total: 1, incomplete: false },
   }
   const requests: { method: string; input: unknown }[] = []
-  const requested = Schema.decodeUnknownOption(Schema.Struct({ input: Schema.Struct({ kind: Kind }) }))
+  const requested = Schema.decodeUnknownSync(Schema.Struct({ input: Schema.Struct({ kind: Kind }) }))
   const app = fixture(feed, async (request) => {
     const method = new URL(request.url).pathname.split("/").at(-1) ?? ""
     const input: unknown = await request.json()
     requests.push({ method, input })
     if (method === "current") return Response.json({ output: null })
     // Echo the requested kind the way the server does, so the active tab tracks it.
-    const kind = Option.getOrUndefined(requested(input))?.input.kind ?? "issue"
-    return Response.json({ output: { ...feed, search: { ...feed.search, kind } } })
+    const kind = requested(input).input.kind
+    return Response.json({ output: { ...feed.search, items: feed.items, kind } })
   })
   const rendered = await testRender(
     () => (
@@ -883,7 +995,7 @@ test("a fresh panel loads current-repository issues and switches PRs through ser
     expect(frame).not.toContain(" All ")
     expect(frame).toContain("1 of 1")
     expect(requests[1].input).toMatchObject({
-      input: { sessionID: "ses_new", query: "is:open", kind: "issue", page: 1 },
+      input: { query: "is:open", kind: "issue", page: 1 },
     })
     await app.key("tab")
     expect(requests[2].input).toMatchObject({ input: { query: "is:open", kind: "pr" } })
@@ -891,25 +1003,24 @@ test("a fresh panel loads current-repository issues and switches PRs through ser
     await app.key("/")
     expect(requests[3].input).toMatchObject({ input: { query: "label:bug", kind: "pr" } })
     await app.key("i")
-    expect(requests[4].input).toMatchObject({ input: { query: "is:open", kind: "issue" } })
+    expect(requests).toHaveLength(4) // Returning to a fresh query uses its cached result.
   } finally {
     rendered.renderer.destroy()
   }
 })
 
 test("repository browsing preserves pagination and switches tabs without a chat selection action", async () => {
-  const shortlist = {
+  const results = {
     items: Array.from({ length: 10 }, (_, index) => ({
       ...issue,
       number: index + 1,
       url: `https://github.com/owner/repo/issues/${index + 1}`,
     })),
-    note: "Agent recommendations",
+    note: "Repository results",
   }
   const feed: Feed = {
-    ...shortlist,
+    ...results,
     selected: null,
-    shortlist,
     revision: 1,
     navigation: 1,
     search: {
@@ -925,34 +1036,28 @@ test("repository browsing preserves pagination and switches tabs without a chat 
   const decode = Schema.decodeUnknownSync(
     Schema.Struct({ input: Schema.Struct({ kind: Kind, page: Schema.Number, query: Schema.String }) }),
   )
-  let revision = 1
   const app = fixture(feed, async (request) => {
     const { input } = decode(await request.json())
     requests.push(input)
     const items =
       input.kind === "pr"
         ? [pr]
-        : Array.from({ length: input.page * 50 }, (_, index) => ({
-            ...issue,
-            number: 100 + index,
-            url: `https://github.com/owner/repo/issues/${100 + index}`,
-            title: `Repository issue ${100 + index}`,
-          }))
+        : Array.from({ length: 50 }, (_, row) => {
+            const index = (input.page - 1) * 50 + row
+            return {
+              ...issue,
+              number: 100 + index,
+              url: `https://github.com/owner/repo/issues/${100 + index}`,
+              title: `Repository issue ${100 + index}`,
+            }
+          })
     return Response.json({
       output: {
         items,
-        selected: null,
-        note: "Repository results",
-        shortlist,
-        revision: ++revision,
-        navigation: revision,
-        search: {
-          ...input,
-          text: "is:open",
-          query: "repo:owner/repo is:open",
-          total: input.kind === "pr" ? 1 : 342,
-          incomplete: false,
-        },
+        ...input,
+        query: "repo:owner/repo is:open",
+        total: input.kind === "pr" ? 1 : 342,
+        incomplete: false,
       },
     })
   })
@@ -961,7 +1066,7 @@ test("repository browsing preserves pagination and switches tabs without a chat 
       <Browser
         context={app.context}
         feed={feed}
-        sessionID="ses_shortlist"
+        sessionID="ses_results"
         focused
         width={70}
         close={() => {}}
@@ -980,84 +1085,92 @@ test("repository browsing preserves pagination and switches tabs without a chat 
     expect(rendered.captureCharFrame()).toContain("50 of 342")
     await app.key("m")
     await rendered.renderOnce()
-    expect(requests[1]).toEqual({ kind: "issue", page: 2, query: "repo:owner/repo is:open" })
+    expect(requests[1]).toEqual({ kind: "issue", page: 2, query: "is:open" })
     expect(rendered.captureCharFrame()).toContain("100 of 342")
     await app.key("tab")
     await rendered.renderOnce()
     expect(requests[2]).toEqual({ kind: "pr", page: 1, query: "is:open" })
     expect(rendered.captureCharFrame()).toContain("Improve the reader")
-    expect(rendered.captureCharFrame()).not.toContain("Shortlist")
     await app.key("tab")
     await rendered.renderOnce()
-    expect(requests[3]).toEqual({ kind: "issue", page: 1, query: "is:open" })
+    expect(requests).toHaveLength(3)
     await app.key("?")
     await rendered.renderOnce()
     expect(app.menus.at(-1)).not.toContain("Restore selected results")
-    expect(rendered.captureCharFrame()).toContain("50 of 342")
+    expect(rendered.captureCharFrame()).toContain("100 of 342")
     expect(rendered.captureCharFrame()).toContain("Repository issue 100")
-    expect(requests).toHaveLength(4)
-    expect(rendered.captureCharFrame()).not.toContain("Shortlist")
+    expect(requests).toHaveLength(3)
   } finally {
     rendered.renderer.destroy()
   }
 })
 
-for (const source of ["memory", "disk"]) {
-  test(`opening GitHub after a chat reference ignores the old ${source} MCP list`, async () => {
-    const feed: Feed = {
-      items: [pr],
-      selected: source === "disk" ? pr.url : null,
-      note: source === "disk" ? "GitHub MCP" : "MCP results · a mentioned PR",
-      revision: 10,
-    }
-    const results: Feed = {
-      items: [issue],
-      selected: null,
-      note: "Repository results",
-      revision: 11,
-      search: {
-        query: "repo:owner/repo is:open",
-        text: "is:open",
-        kind: "issue",
-        page: 1,
-        total: 50,
-        incomplete: false,
-      },
-    }
-    const paths: string[] = []
-    const app = fixture(feed, async (request) => {
-      const path = new URL(request.url).pathname
-      paths.push(path)
-      if (path.endsWith("/current")) return Response.json({ output: feed })
-      expect(await request.json()).toMatchObject({ input: { query: "is:open", kind: "issue", page: 1 } })
-      return Response.json({ output: results })
-    })
-    const rendered = await testRender(
-      () => (
+test("rendering an agent's chat link never populates either cache; clicking it explicitly loads the item", async () => {
+  const queryClient = createQueryClient()
+  const initial: Feed = {
+    items: [issue],
+    selected: null,
+    note: "Repository results",
+    revision: 1,
+    navigation: 1,
+  }
+  const [feed, setFeed] = createSignal(initial)
+  const paths: string[] = []
+  const app = fixture(initial, async (request) => {
+    const path = new URL(request.url).pathname
+    paths.push(path)
+    expect(await request.json()).toMatchObject({ input: { url: pr.url, part: "details" } })
+    return Response.json({ output: { part: "details", item: pr } })
+  })
+  const rendered = await testRender(
+    () => (
+      <box height="100%">
+        <text flexShrink={0}>
+          <a href={pr.url}>Agent mentioned #43</a>
+        </text>
         <Browser
           context={app.context}
           sessionID="ses_saved"
-          feed={source === "memory" ? feed : undefined}
+          queryClient={queryClient}
+          feed={feed()}
           focused
           width={70}
           close={() => {}}
           openURL={async () => {}}
           openTab={async () => {}}
         />
-      ),
-      { width: 70, height: 28 },
-    )
-    try {
-      await rendered.waitForVisualIdle()
-      expect(paths).toEqual(["/api/rpc/github-browser/current", "/api/rpc/github-browser/search"])
-      expect(rendered.captureCharFrame()).toContain("Keep GitHub inside")
-      expect(rendered.captureCharFrame()).not.toContain("Improve the reader")
-      expect(rendered.captureCharFrame()).toContain("1 of 50")
-    } finally {
-      rendered.renderer.destroy()
-    }
+      </box>
+    ),
+    { width: 70, height: 28 },
+  )
+  const stop = registerLinks(rendered.renderer, (url) => {
+    const opened = { ...initial, items: [issue, reference(url)], selected: url, revision: 2, navigation: 2 }
+    app.values.set("browser.v2/ses_saved", { feed: opened, pinned: null })
+    setFeed(opened)
   })
-}
+  try {
+    await rendered.waitForVisualIdle()
+    expect(paths).toEqual([])
+    expect(queryClient.getQueryCache().getAll()).toHaveLength(0)
+    expect(app.values.size).toBe(0)
+    expect(rendered.captureCharFrame()).toContain("Keep GitHub inside")
+    expect(rendered.captureCharFrame()).not.toContain("Improve the reader")
+    await rendered.mockMouse.click(3, 0)
+    await rendered.waitForFrame((frame) => frame.includes("Improve the reader"))
+    expect(paths).toEqual(["/api/rpc/github-browser/read"])
+    const cached = queryClient
+      .getQueryCache()
+      .getAll()
+      .map((query) => query.state.data)
+    expect(cached).toHaveLength(1)
+    expect(JSON.stringify(cached)).toContain(pr.url)
+    expect(app.values.size).toBe(1)
+  } finally {
+    stop()
+    rendered.renderer.destroy()
+    queryClient.clear()
+  }
+})
 
 for (const width of [32, 45, 80]) {
   test(`refresh keeps saved rows below a separate loader at ${width} columns`, async () => {
@@ -1201,7 +1314,7 @@ test("first open stays in loading from saved-view lookup through the initial sea
     expect(second.split("\n").findIndex((line) => line.includes("esc cancel"))).toBe(
       first.split("\n").findIndex((line) => line.includes("esc cancel")),
     )
-    search.resolve(Response.json({ output: feed }))
+    search.resolve(Response.json({ output: { ...feed.search, items: feed.items } }))
     await rendered.waitForVisualIdle()
     expect(rendered.captureCharFrame()).toContain("Keep GitHub inside")
     expect(rendered.captureCharFrame()).not.toContain("esc cancel")
@@ -1247,7 +1360,7 @@ test("Escape cancels the saved-view lookup and ignores its late reply", async ()
 })
 
 test("a failed first-open lookup stops loading and Retry restores the saved view", async () => {
-  const feed = { items: [pr], selected: null, note: "Shortlist" }
+  const feed = { items: [pr], selected: null, note: "Repository results" }
   let count = 0
   const app = fixture(feed, async () =>
     ++count === 1

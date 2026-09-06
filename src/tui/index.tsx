@@ -6,14 +6,16 @@ import { GitHub, errorMessage, type Feed, type Item } from "../shared/rpc"
 import { createIssueSession } from "./session"
 import { githubURL, reference } from "../shared/url"
 import { registerLinks } from "./links"
+import { createQueryClient } from "./query"
 
 export default Plugin.define({
   id: "github-browser.tui",
   setup(context) {
+    const queryClient = createQueryClient()
     const [state, update] = context.storage.memory<{
       feeds: Record<string, Feed>
       tabs: Record<string, string>
-    }>("viewer.v1", { initial: { feeds: {}, tabs: {} } })
+    }>("viewer.v2", { initial: { feeds: {}, tabs: {} } })
     const opening = new Map<string, Promise<string>>()
     let navigation = 0
     const showPanel = (focus = false) => {
@@ -97,6 +99,7 @@ export default Plugin.define({
       render: (panel) => (
         <Show when={panel.name === "github-browser.issues"}>
           <Browser
+            queryClient={queryClient}
             context={context}
             sessionID={panel.sessionID}
             feed={state.feeds[panel.sessionID]}
@@ -118,6 +121,7 @@ export default Plugin.define({
         const dimensions = useTerminalDimensions()
         return (
           <Browser
+            queryClient={queryClient}
             context={context}
             close={() => context.ui.router.navigate({ type: "home" })}
             width={dimensions().width}
@@ -175,6 +179,7 @@ export default Plugin.define({
       navigation++
       stop()
       stopLinks()
+      queryClient.clear()
     }
   },
 })

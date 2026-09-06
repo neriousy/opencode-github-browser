@@ -120,17 +120,7 @@ export class GitHubClient extends Context.Service<GitHubClient>()("github-browse
               Effect.mapError(() => new GitHubError({ message: "GitHub returned an unexpected paginated response." })),
             )).flat()
           : response
-        return {
-          tool: item.kind === "pr" ? "pull_request_read" : "issue_read",
-          input: {
-            owner: item.owner,
-            repo: item.repo,
-            issue_number: item.kind === "issue" ? item.number : undefined,
-            pullNumber: item.kind === "pr" ? item.number : undefined,
-            method: part === "details" ? "get" : part === "comments" ? "get_comments" : "get_files",
-          },
-          result: { output },
-        }
+        return output
       }),
       search: Effect.fn("GitHubClient.search")(function* (
         query: string,

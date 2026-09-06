@@ -13,7 +13,8 @@ import { PullRequestDiff } from "./diff"
 import { GitHubMarkdown } from "./markdown"
 import { markdownReferences } from "./markdown-text"
 import { githubURL } from "../shared/url"
-import { isLegacyMcpFeed } from "../shared/feed"
+import type { QueryClient } from "@tanstack/query-core"
+import { browserQueries, createQueryClient } from "./query"
 
 const tabTitle = (kind: Item["kind"]) => (kind === "issue" ? "Issues" : "PRs")
 const kindTitle = (kind: Item["kind"]) => (kind === "pr" ? "PR" : "Issue")
@@ -29,6 +30,7 @@ type View = HistoryEntry & {
 }
 
 export function Browser(props: {
+  queryClient?: QueryClient
   context: BrowserHost
   sessionID?: string
   feed?: Feed
@@ -69,11 +71,16 @@ export function Browser(props: {
     },
   }
   const renderer = useRenderer()
+  const queryClient = props.queryClient ?? createQueryClient()
+  const queries = browserQueries(queryClient, context.client)
+  onCleanup(() => {
+    if (!props.queryClient) queryClient.clear()
+  })
   const [paneWidth, setPaneWidth] = createSignal(props.width)
   // The host's chat column and sidebar use 2-cell gutters, tightening to 1 on narrow terminals.
   const gutter = () => (paneWidth() < 44 ? 1 : 2)
   const innerWidth = () => Math.max(1, paneWidth() - gutter() * 2)
-  const [memory, updateMemory] = context.storage.memory<{ views: Record<string, View> }>("navigation.v1", {
+  const [memory, updateMemory] = context.storage.memory<{ views: Record<string, View> }>("navigation.v2", {
     initial: { views: {} },
   })
   const focused = () => props.focused !== false
@@ -82,7 +89,7 @@ export function Browser(props: {
     (props.sessionID ? context.data.session.get(props.sessionID)?.location : undefined) ??
     context.location ??
     context.data.location.default()
-  const incoming = () => (props.feed && !isLegacyMcpFeed(props.feed) ? props.feed : undefined)
+  const incoming = () => props.feed
   const [state, setState] = createStore<{
     feed: Feed
     selected: string | null
@@ -182,34 +189,30 @@ export function Browser(props: {
   const navigate = (url: string) => {
     if (url === state.selected) return
     cancel()
+    pausedRead = undefined
     setState({ history: [...state.history, remember()], selected: url, diff: false, error: "" })
     scrollTo(0)
   }
   let disposed = false
-  let restoreController: AbortController | undefined
-  const cancelRestore = () => {
-    if (!restoreController) return
-    restoreController.abort()
-    restoreController = undefined
-    setState("loading", "")
-  }
-  let readController: AbortController | undefined
-  let searchController: AbortController | undefined
+  let pausedRead: string | null | undefined
+  let request: { kind: "restore" | "read" | "search" | "action"; controller: AbortController } | undefined
   let retry: (() => void) | undefined
-  let action = 0
+  const cancelRequest = () => {
+    if (request?.kind === "read") pausedRead = state.selected
+    request?.controller.abort()
+    request = undefined
+    setState({ loading: "", busy: false })
+  }
+  const cancelRestore = () => {
+    if (request?.kind === "restore") cancelRequest()
+  }
   const cancelRead = () => {
-    readController?.abort()
-    readController = undefined
-    setState("loading", "")
+    if (request?.kind === "read") cancelRequest()
   }
   const cancel = () => {
-    action++
-    cancelRestore()
-    cancelRead()
-    searchController?.abort()
+    cancelRequest()
     if (restoreScroll) renderer.off(CliRenderEvents.FRAME, restoreScroll)
     restoreScroll = undefined
-    searchController = undefined
     setState({ busy: false, error: "", diff: state.diff && selected()?.files !== null })
   }
   const clearFilters = () => {
@@ -218,24 +221,36 @@ export function Browser(props: {
   }
   onCleanup(() => {
     disposed = true
-    restoreController?.abort()
-    readController?.abort()
-    searchController?.abort()
+    request?.controller.abort()
     if (restoreScroll) renderer.off(CliRenderEvents.FRAME, restoreScroll)
     syntax.destroy()
   })
-  const perform = async (task: () => Promise<void>) => {
+  const run = async (
+    kind: NonNullable<typeof request>["kind"],
+    loading: string,
+    task: (signal: AbortSignal) => Promise<void>,
+    again: () => void,
+  ) => {
+    request?.controller.abort()
+    const current = { kind, controller: new AbortController() }
+    request = current
+    retry = again
+    setState({ busy: true, loading, error: "" })
+    try {
+      await task(current.controller.signal)
+    } catch (error) {
+      if (!disposed && !current.controller.signal.aborted)
+        setState({ error: errorMessage(error), ...(kind === "read" ? { diff: false } : {}) })
+    } finally {
+      if (!disposed && request === current) {
+        request = undefined
+        setState({ busy: false, loading: "" })
+      }
+    }
+  }
+  const perform = (task: () => Promise<void>) => {
     if (state.busy) return
-    cancelRestore()
-    const request = ++action
-    setState({ busy: true, error: "" })
-    await task()
-      .catch((error) => {
-        if (!disposed && action === request) setState("error", errorMessage(error))
-      })
-      .finally(() => {
-        if (!disposed && action === request) setState("busy", false)
-      })
+    return run("action", "", task, () => void perform(task))
   }
   let activeSession: string | undefined
   let hydratedSession: string | undefined
@@ -261,7 +276,7 @@ export function Browser(props: {
     if ((feed.revision ?? 0) < (state.feed.revision ?? 0)) return
     const highlighted = items()[state.index]?.url
     const initial = hydratedSession !== props.sessionID
-    const explicit = serverNavigation !== feed.navigation
+    const explicit = (serverNavigation ?? 0) !== (feed.navigation ?? 0)
     const requested = explicit || (initial && serverSelection !== feed.selected) ? feed.selected : state.selected
     const identity = requested ? githubURL(requested) : undefined
     const selection =
@@ -295,30 +310,21 @@ export function Browser(props: {
     hydratedSession = props.sessionID
     saveView()
   }
-  const restore = async (sessionID: string) => {
-    cancelRestore()
-    const controller = new AbortController()
-    restoreController = controller
-    retry = () => void restore(sessionID)
-    setState({ loading: "Opening GitHub…", error: "" })
-    try {
-      const saved = await context.client
-        .rpc(GitHub)
-        .current({ sessionID }, { location: location(), signal: controller.signal })
-      if (disposed || controller.signal.aborted) return
-      restoreController = undefined
-      if (saved && !isLegacyMcpFeed(saved)) {
-        setState("loading", "")
-        apply(saved)
-        return
-      }
-      await searchRequest("is:open", "issue")
-    } catch (error) {
-      if (!disposed && !controller.signal.aborted) setState({ loading: "", error: errorMessage(error) })
-    } finally {
-      if (restoreController === controller) restoreController = undefined
-    }
-  }
+  const restore = (sessionID: string) =>
+    run(
+      "restore",
+      "Opening GitHub…",
+      async (signal) => {
+        const saved = await context.client.rpc(GitHub).current({ sessionID }, { location: location(), signal })
+        if (disposed || signal.aborted) return
+        if (saved) {
+          apply(saved)
+          return
+        }
+        await searchRequest("is:open", "issue")
+      },
+      () => void restore(sessionID),
+    )
   createEffect(() => {
     const feed = incoming()
     const sessionID = props.sessionID
@@ -331,6 +337,7 @@ export function Browser(props: {
         serverNavigation = saved?.serverNavigation
         pendingScroll = saved?.scroll ?? 0
         cancel()
+        pausedRead = undefined
         retry = undefined
         setState({
           feed: { items: [], selected: null, note: "" },
@@ -361,24 +368,21 @@ export function Browser(props: {
   )
   onCleanup(saveView)
   const searchRequest = (query: string, kind: "all" | "issue" | "pr", page = 1, refresh = false) =>
-    perform(async () => {
-      cancelRead()
-      const controller = new AbortController()
-      searchController = controller
-      retry = () => void searchRequest(query, kind, page, true)
-      setState(
-        "loading",
-        `${refresh ? "Refreshing" : "Loading"} ${kind === "pr" ? "pull requests" : kind === "issue" ? "issues" : "results"}…`,
-      )
-      try {
+    run(
+      "search",
+      `${refresh ? "Refreshing" : "Loading"} ${kind === "pr" ? "pull requests" : kind === "issue" ? "issues" : "results"}…`,
+      async (signal) => {
+        const target = location()
         const sessionID =
           props.sessionID ??
-          (await context.client.session.create({ title: `GitHub · ${query}`, location: location() })).id
-        if (disposed || controller.signal.aborted) return
+          (await context.client.session.create({ title: `GitHub · ${query}`, location: target }, { signal })).id
+        if (disposed || signal.aborted) return
+        const data = await queries.search(target, query, kind, page > 1, refresh, state.feed, signal)
+        if (disposed || signal.aborted) return
         const feed = await context.client
           .rpc(GitHub)
-          .search({ sessionID, query, kind, page, refresh }, { location: location(), signal: controller.signal })
-        if (disposed || controller.signal.aborted) return
+          .saveSearch({ sessionID, pages: data.pages, text: query, navigate: page === 1 }, { location: target, signal })
+        if (disposed || signal.aborted) return
         if (page === 1) {
           setState({ query: refresh ? state.query : "", kind })
           if (!refresh) scrollTo(0)
@@ -386,18 +390,15 @@ export function Browser(props: {
         apply(feed)
         if (!props.sessionID) {
           await context.data.session.sync(sessionID)
-          if (disposed || controller.signal.aborted) return
+          if (disposed || signal.aborted) return
           context.ui.tabs.open(sessionID)
           context.ui.router.navigate({ type: "session", sessionID })
           context.ui.panel.open("github-browser.issues")
           queueMicrotask(() => context.keymap.dispatch("pane.focus.right"))
         }
-      } catch (error) {
-        if (!controller.signal.aborted) throw error
-      } finally {
-        if (!disposed && searchController === controller) setState("loading", "")
-      }
-    })
+      },
+      () => void searchRequest(query, kind, page, true),
+    )
   const search = async () => {
     const query = await context.ui.dialog.prompt({
       title: "Search GitHub",
@@ -421,7 +422,7 @@ export function Browser(props: {
     !!state.feed.search && state.feed.search.page * SEARCH_PAGE_SIZE < Math.min(state.feed.search.total, 1000)
   const more = () => {
     const search = state.feed.search
-    if (search && hasMore()) return searchRequest(search.query, search.kind, search.page + 1)
+    if (search && hasMore()) return searchRequest(search.text ?? search.query, search.kind, search.page + 1)
   }
   const filter = async () => {
     const query = await context.ui.dialog.prompt({
@@ -434,39 +435,35 @@ export function Browser(props: {
       scrollTo(0)
     }
   }
-  // Details attempted per session and item, so a failed read shows its error once instead of retrying forever.
-  const attempted = new Set<string>()
-  const fetch = async (part: "details" | "comments" | "diff", item = selected(), refresh = true) => {
+  const fetch = (part: "details" | "comments" | "diff", item = selected(), refresh = true) => {
     const sessionID = props.sessionID
     if (!item || !sessionID || state.loading) return
-    retry = () => void fetch(part, item, true)
     if (part === "diff") setState("diff", true)
-    const controller = new AbortController()
-    readController = controller
-    setState({ loading: `${refresh ? "Refreshing" : "Loading"} ${part} for #${item.number}…`, error: "" })
-    try {
-      const feed = await context.client
-        .rpc(GitHub)
-        .read({ sessionID, url: item.url, part, refresh }, { location: location(), signal: controller.signal })
-      if (!disposed && !controller.signal.aborted) apply(feed)
-    } catch (error) {
-      if (!disposed && !controller.signal.aborted)
-        setState({ error: errorMessage(error), ...(part === "diff" ? { diff: false } : {}) })
-    } finally {
-      // A read cancelled by navigating away must run again when the item is reopened.
-      if (controller.signal.aborted) attempted.delete(`${sessionID}:${item.url}`)
-      if (!disposed && readController === controller) setState("loading", "")
-    }
+    return run(
+      "read",
+      `${refresh ? "Refreshing" : "Loading"} ${part} for #${item.number}…`,
+      async (signal) => {
+        const target = location()
+        const result = await queries.read(target, item.url, part, refresh, signal)
+        if (disposed || signal.aborted) return
+        const feed = await context.client.rpc(GitHub).saveRead({ sessionID, result }, { location: target, signal })
+        if (!disposed && !signal.aborted) apply(feed)
+      },
+      () => void fetch(part, item, true),
+    )
   }
-  // Search results already carry the description; only bare references (URL opens, minimal MCP rows) need details.
+  // Search results already carry the description; only bare URL references need details.
   createEffect(() => {
     const item = selected()
     const sessionID = props.sessionID
     const loading = state.loading
-    if (!item || !sessionID || loading || item.bodyLoaded) return
-    const key = `${sessionID}:${item.url}`
-    if (attempted.has(key)) return
-    attempted.add(key)
+    if (!item || !sessionID || loading || state.error || item.bodyLoaded || pausedRead === item.url) return
+    const cached = queries.readState(location(), item.url, "details")
+    if (cached?.status === "error")
+      return untrack(() => {
+        retry = () => void fetch("details", item, true)
+        setState("error", errorMessage(cached.error))
+      })
     untrack(() => void fetch("details", item, false))
   })
   const openURL = async () => {
@@ -488,6 +485,7 @@ export function Browser(props: {
     if (state.loading) return cancel()
     if (state.diff) return setState("diff", false)
     cancelRead()
+    pausedRead = undefined
     const previous = state.history.at(-1)
     if (previous) {
       const selected = state.feed.items.some((item) => item.url === previous.selected) ? previous.selected : null
@@ -1032,11 +1030,6 @@ export function Browser(props: {
                     label={item().files === null ? "Load diff" : "View diff"}
                     onMouseUp={() => void viewDiff()}
                   />
-                </Show>
-                <Show when={item().reason}>
-                  <text fg={context.theme.text.subdued} wrapMode="word">
-                    {item().reason}
-                  </text>
                 </Show>
                 <Show when={item().bodyLoaded}>
                   <GitHubMarkdown

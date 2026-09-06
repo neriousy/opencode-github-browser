@@ -4,7 +4,7 @@ Follow the OpenCode v2 conventions in `../opencode/AGENTS.md` when applicable. T
 
 - Organize source by runtime boundary: `src/server` for Effect/server logic, `src/tui` for terminal UI, and `src/shared` for contracts and pure helpers used by both. Shared modules must not import either runtime; mirror these folders under `test`. Keep root package entrypoints thin.
 - The product is an in-TUI reader for GitHub issues and PRs. Opening, searching, reading discussions, and viewing diffs must not require a model turn or external browser.
-- Default new browser views and unqualified searches to the active project’s repository. Restore repository searches and show the current scope. Chat and MCP results must not populate the browser; opening a referenced item requires an explicit user action. Keep browsing separate from explicit discuss/work actions.
+- Default new browser views and unqualified searches to the active project’s repository. Restore repository searches and show the current scope. Chat mentions and agent tool results must not populate the browser or its caches; opening a referenced item requires an explicit user action. Keep browsing separate from explicit discuss/work actions.
 - Keep GitHub requests read-only and server-side, using the server's existing `gh` authentication. Agent discussion/work/review is an explicit user action.
 - Use `@opencode-ai/plugin/effect` for server lifecycle, RPC, hooks, and tools. Keep Solid state and the public Promise client at the TUI boundary.
 - Match the Effect version used by the pinned OpenCode plugin package. Update them together; do not independently follow a floating Effect prerelease tag.

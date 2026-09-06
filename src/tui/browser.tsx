@@ -21,12 +21,12 @@ const kindTitle = (kind: Item["kind"]) => (kind === "pr" ? "PR" : "Issue")
 
 type HistoryEntry = { selected: string | null; index: number; scroll: number }
 type View = HistoryEntry & {
-  kind: "all" | "issue" | "pr"
+  kind: Item["kind"]
   query: string
   diff: boolean
   history: HistoryEntry[]
   serverSelection: string | null
-  serverNavigation?: number
+  serverNavigation: number
 }
 
 export function Browser(props: {
@@ -89,11 +89,10 @@ export function Browser(props: {
     (props.sessionID ? context.data.session.get(props.sessionID)?.location : undefined) ??
     context.location ??
     context.data.location.default()
-  const incoming = () => props.feed
   const [state, setState] = createStore<{
     feed: Feed
     selected: string | null
-    kind: "all" | "issue" | "pr"
+    kind: Item["kind"]
     query: string
     index: number
     busy: boolean
@@ -102,24 +101,22 @@ export function Browser(props: {
     diff: boolean
     history: HistoryEntry[]
   }>({
-    feed: { items: [], selected: null, note: "" },
+    feed: { items: [], selected: null, revision: 0, navigation: 0 },
     selected: null,
-    kind: incoming() ? "all" : "issue",
+    kind: "issue",
     query: "",
     index: 0,
     busy: false,
-    loading: incoming() ? "" : "Opening GitHub…",
+    loading: props.feed ? "" : "Opening GitHub…",
     error: "",
     diff: false,
     history: [],
   })
   const items = createMemo(() =>
-    state.feed.items.filter(
-      (item) =>
-        (state.kind === "all" || item.kind === state.kind) &&
-        `${item.number} ${item.title} ${item.repository} ${item.labels.join(" ")}`
-          .toLowerCase()
-          .includes(state.query.toLowerCase()),
+    state.feed.items.filter((item) =>
+      `${item.number} ${item.title} ${item.repository} ${item.labels.join(" ")}`
+        .toLowerCase()
+        .includes(state.query.toLowerCase()),
     ),
   )
   const repository = createMemo(() => {
@@ -135,11 +132,8 @@ export function Browser(props: {
       ) ?? reference(identity.url)
     )
   })
-  const activeTab = () => (!state.feed.search && state.feed.items.length ? undefined : state.kind)
   const tabs: Item["kind"][] = ["issue", "pr"]
-  const mixed = createMemo(() => new Set(items().map((item) => item.kind)).size > 1)
   const numberWidth = createMemo(() => items().reduce((width, item) => Math.max(width, `#${item.number}`.length), 0))
-  const filtered = () => !!state.query || (!state.feed.search && state.kind !== "all")
   const stateColor = (value: string) => {
     if (value === "open") return context.theme.text.feedback.success.default
     if (value === "merged") return context.theme.text.feedback.info.default
@@ -224,7 +218,7 @@ export function Browser(props: {
     setState({ busy: false, error: "", diff: state.diff && selected()?.files !== null })
   }
   const clearFilters = () => {
-    setState({ query: "", index: 0, ...(state.feed.search ? {} : { kind: "all" }) })
+    setState({ query: "", index: 0 })
     scrollTo(0)
   }
   onCleanup(() => {
@@ -263,7 +257,7 @@ export function Browser(props: {
   let activeSession: string | undefined
   let hydratedSession: string | undefined
   let serverSelection: string | null = null
-  let serverNavigation: number | undefined
+  let serverNavigation = 0
   const saveView = () => {
     const sessionID = props.sessionID
     if (!sessionID || hydratedSession !== sessionID) return
@@ -281,10 +275,10 @@ export function Browser(props: {
     })
   }
   const apply = (feed: Feed) => {
-    if ((feed.revision ?? 0) < (state.feed.revision ?? 0)) return
+    if (feed.revision < state.feed.revision) return
     const highlighted = items()[state.index]?.url
     const initial = hydratedSession !== props.sessionID
-    const explicit = (serverNavigation ?? 0) !== (feed.navigation ?? 0)
+    const explicit = serverNavigation !== feed.navigation
     const requested = explicit || (initial && serverSelection !== feed.selected) ? feed.selected : state.selected
     const identity = requested ? githubURL(requested) : undefined
     const selection =
@@ -305,7 +299,7 @@ export function Browser(props: {
       feed,
       selected: selection,
       // A server search already scoped the results; the tab must reflect it.
-      kind: feed.search?.kind ?? "all",
+      kind: feed.search?.kind ?? "issue",
     })
     setState(
       "index",
@@ -335,7 +329,7 @@ export function Browser(props: {
       () => void restore(sessionID),
     )
   createEffect(() => {
-    const feed = incoming()
+    const feed = props.feed
     const sessionID = props.sessionID
     if (activeSession !== sessionID)
       untrack(() => {
@@ -343,18 +337,18 @@ export function Browser(props: {
         hydratedSession = undefined
         const saved = sessionID ? memory.views[sessionID] : undefined
         serverSelection = saved?.serverSelection ?? null
-        serverNavigation = saved?.serverNavigation
+        serverNavigation = saved?.serverNavigation ?? 0
         pendingScroll = saved?.scroll ?? 0
         cancel()
         pausedRead = undefined
         retry = undefined
         setState({
-          feed: { items: [], selected: null, note: "" },
+          feed: { items: [], selected: null, revision: 0, navigation: 0 },
           selected: saved?.selected ?? null,
           diff: saved?.diff ?? false,
           query: saved?.query ?? "",
           index: saved?.index ?? 0,
-          kind: saved?.kind ?? (feed ? "all" : "issue"),
+          kind: saved?.kind ?? "issue",
           error: "",
           loading: feed ? "" : "Opening GitHub…",
           history: saved?.history ?? [],
@@ -376,7 +370,7 @@ export function Browser(props: {
     ),
   )
   onCleanup(saveView)
-  const searchRequest = (query: string, kind: "all" | "issue" | "pr", page = 1, refresh = false) =>
+  const searchRequest = (query: string, kind: Item["kind"], page = 1, refresh = false) =>
     run(
       "search",
       `${refresh ? "Refreshing" : "Loading"} ${kind === "pr" ? "pull requests" : kind === "issue" ? "issues" : "results"}…`,
@@ -412,26 +406,22 @@ export function Browser(props: {
     const query = await context.ui.dialog.prompt({
       title: "Search GitHub",
       description: "Search this project’s GitHub repository. Use repo:owner/repo, org:, or user: to search elsewhere.",
-      value: state.feed.search?.text ?? state.feed.search?.query,
+      value: state.feed.search?.text,
       placeholder: "is:open label:bug",
     })
-    if (query?.trim()) await searchRequest(query.trim(), state.kind === "pr" ? "pr" : "issue")
+    if (query?.trim()) await searchRequest(query.trim(), state.kind)
   }
   const changeKind = (kind: Item["kind"]) => {
-    if (kind === activeTab()) return
+    if (kind === state.kind && state.feed.search) return
     const search = state.feed.search
-    return searchRequest(search?.text ?? search?.query ?? "is:open", kind)
+    return searchRequest(search?.text ?? "is:open", kind)
   }
-  const nextKind = () => {
-    const available = tabs
-    const next = available[(available.findIndex((kind) => kind === activeTab()) + 1) % available.length]
-    if (next) return changeKind(next)
-  }
+  const nextKind = () => changeKind(state.kind === "issue" ? "pr" : "issue")
   const hasMore = () =>
     !!state.feed.search && state.feed.search.page * SEARCH_PAGE_SIZE < Math.min(state.feed.search.total, 1000)
   const more = () => {
     const search = state.feed.search
-    if (search && hasMore()) return searchRequest(search.text ?? search.query, search.kind, search.page + 1)
+    if (search && hasMore()) return searchRequest(search.text, search.kind, search.page + 1)
   }
   const filter = async () => {
     const query = await context.ui.dialog.prompt({
@@ -574,7 +564,7 @@ export function Browser(props: {
       enabled: !selected() && !!state.feed.search,
       run: () => {
         const search = state.feed.search
-        if (search) return searchRequest(search.text ?? search.query, search.kind, 1, true)
+        if (search) return searchRequest(search.text, search.kind, 1, true)
       },
     },
     {
@@ -597,7 +587,7 @@ export function Browser(props: {
       group: "Browse",
       title: "Clear displayed-result filters",
       bind: "x",
-      enabled: !selected() && filtered(),
+      enabled: !selected() && !!state.query,
       run: clearFilters,
     },
     {
@@ -826,15 +816,17 @@ export function Browser(props: {
                 <Show when={!selected() && repository() ? state.feed.search : undefined}>
                   {(search) => (
                     <text fg={context.theme.text.subdued} wrapMode="none" truncate flexShrink={1} minWidth={0}>
-                      {` · ${search().text ?? search().query.replace(/^repo:\S+\s*/, "")}`}
+                      {` · ${search().text}`}
                     </text>
                   )}
                 </Show>
               </box>
-              <Show when={!selected() && (!state.loading || state.feed.items.length > 0)}>
-                <text fg={context.theme.text.subdued} wrapMode="none" flexShrink={0}>
-                  {state.feed.search ? `${items().length} of ${state.feed.search.total}` : `${items().length} selected`}
-                </text>
+              <Show when={!selected() && state.feed.search}>
+                {(search) => (
+                  <text fg={context.theme.text.subdued} wrapMode="none" flexShrink={0}>
+                    {`${items().length} of ${search().total}`}
+                  </text>
+                )}
               </Show>
             </box>
           )}
@@ -851,8 +843,8 @@ export function Browser(props: {
             <For each={tabs}>
               {(kind) => (
                 <text
-                  fg={activeTab() === kind ? context.theme.text.default : context.theme.text.subdued}
-                  attributes={activeTab() === kind ? TextAttributes.BOLD : undefined}
+                  fg={state.kind === kind ? context.theme.text.default : context.theme.text.subdued}
+                  attributes={state.kind === kind ? TextAttributes.BOLD : undefined}
                   onMouseUp={() => void changeKind(kind)}
                   selectable={false}
                 >
@@ -942,12 +934,9 @@ export function Browser(props: {
                       ? context.theme.background.action.primary.hovered
                       : context.theme.background.default
                   const meta = () =>
-                    [
-                      mixed() ? kindTitle(item.kind) : "",
-                      !repository() ? item.repository : "",
-                      ...item.labels,
-                      item.author ? `@${item.author}` : "",
-                    ].filter(Boolean)
+                    [!repository() ? item.repository : "", ...item.labels, item.author ? `@${item.author}` : ""].filter(
+                      Boolean,
+                    )
                   const indent = () => numberWidth() + 2
                   return (
                     <box

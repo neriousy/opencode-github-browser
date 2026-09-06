@@ -7,6 +7,7 @@ import type { SessionContext } from "@opencode-ai/plugin/effect/session"
 import { reference } from "../../src/shared/url"
 import { activate } from "../../src/server/index"
 import { testEffect } from "../helpers"
+import { detailFeed } from "../fixtures"
 
 testEffect(Layer.empty)("registrations remain alive after activation and are disposed on plugin unload", () =>
   Effect.gen(function* () {
@@ -20,7 +21,7 @@ testEffect(Layer.empty)("registrations remain alive after activation and are dis
       bodyLoaded: true,
     }
     values.set("browser.v2/ses_item", {
-      feed: { items: [item], selected: item.url, note: "Pinned GitHub reference" },
+      feed: detailFeed(item),
       pinned: item,
     })
     const contextCallbacks: Effect.Effect<void>[] = []

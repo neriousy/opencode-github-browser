@@ -4,6 +4,7 @@ import { FeedStorage, FeedStore } from "../../src/server/store"
 import { openView, readView, searchView } from "../../src/server/view"
 import { reference } from "../../src/shared/url"
 import { testEffect } from "../helpers"
+import { searchFeed } from "../fixtures"
 
 const item = { ...reference("https://github.com/owner/repo/issues/42"), title: "Issue", body: "Old", bodyLoaded: true }
 const layer = FeedStore.layer.pipe(
@@ -103,7 +104,7 @@ testEffect(layer)("opening and reading a reference outside a search never adds i
 testEffect(layer)("a malformed page sequence cannot overwrite the saved search or advance its revision", () =>
   Effect.gen(function* () {
     const store = yield* FeedStore
-    const initial = yield* store.update("ses_item", () => ({ items: [item], selected: null, note: "Saved" }))
+    const initial = yield* store.update("ses_item", () => searchFeed([item]))
     const error = yield* store
       .update("ses_item", (snapshot) =>
         searchView(

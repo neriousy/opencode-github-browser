@@ -1,6 +1,6 @@
 import type { StorageDomain } from "@opencode-ai/plugin/effect/storage"
 import { Context, Effect, Layer, RcMap, Schema, Semaphore } from "effect"
-import { Feed, Item } from "../shared/rpc"
+import { Feed, Item, type BrowserView } from "../shared/rpc"
 import { ViewError } from "./errors"
 import { githubURL } from "../shared/url"
 
@@ -58,7 +58,7 @@ export class FeedStore extends Context.Service<FeedStore>()("github-browser/Feed
       update: Effect.fn("FeedStore.update")(
         (
           sessionID: string,
-          change: (snapshot: Snapshot) => Feed | ViewError | null,
+          change: (snapshot: Snapshot) => BrowserView | ViewError,
           options: { reveal?: boolean; pin?: typeof Item.Type } = {},
         ) =>
           locked(
@@ -67,7 +67,6 @@ export class FeedStore extends Context.Service<FeedStore>()("github-browser/Feed
               const snapshot = yield* load(sessionID)
               const changed = change(snapshot)
               if (changed instanceof ViewError) return yield* changed
-              if (!changed) return null
               const revision = (snapshot.feed?.revision ?? 0) + 1
               const feed: Feed = {
                 ...changed,

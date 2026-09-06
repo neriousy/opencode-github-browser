@@ -71,7 +71,7 @@ export default Plugin.define({
         .rpc(GitHub)
         .open({ sessionID: route.sessionID, url: identity.url }, { location })
       update((draft) => {
-        if ((feed.revision ?? 0) >= (draft.feeds[route.sessionID]?.revision ?? 0)) draft.feeds[route.sessionID] = feed
+        if (feed.revision >= (draft.feeds[route.sessionID]?.revision ?? 0)) draft.feeds[route.sessionID] = feed
       })
       const current = context.ui.router.current()
       if (current.type === "session" && current.sessionID === route.sessionID) showPanel(true)
@@ -80,7 +80,7 @@ export default Plugin.define({
       void openURL(url).catch((error) => context.ui.toast.show({ message: errorMessage(error), variant: "error" }))
     })
     const stop = context.client.rpc(GitHub).events.on("selected", (event) => {
-      if ((event.data.feed.revision ?? 0) < (state.feeds[event.data.sessionID]?.revision ?? 0)) return
+      if (event.data.feed.revision < (state.feeds[event.data.sessionID]?.revision ?? 0)) return
       update((draft) => {
         draft.feeds[event.data.sessionID] = event.data.feed
         // An /issues/N link can resolve to /pull/N. Reuse the same tab for either URL.

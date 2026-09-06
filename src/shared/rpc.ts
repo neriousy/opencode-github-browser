@@ -1,9 +1,9 @@
 import type { StandardSchemaV1, StandardJSONSchemaV1 } from "effect/StandardSchema"
 import { Rpc } from "@opencode-ai/plugin/rpc"
-import { Effect, Option, Schema } from "effect"
+import { Option, Schema } from "effect"
 
 export const SEARCH_PAGE_SIZE = 50
-export const Kind = Schema.Literals(["all", "issue", "pr"])
+export const Kind = Schema.Literals(["issue", "pr"])
 export const Part = Schema.Literals(["details", "comments", "diff"])
 const Positive = Schema.Int.check(Schema.isGreaterThan(0))
 const Nonnegative = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
@@ -30,25 +30,20 @@ export const Item = Schema.Struct({
   labels: Schema.Array(Schema.String),
   body: Schema.String,
   bodyLoaded: Schema.Boolean,
-  comments: Schema.Array(
-    Schema.Struct({ id: Schema.optional(Schema.String), author: Schema.String, body: Schema.String }),
-  ),
+  comments: Schema.Array(Schema.Struct({ id: Schema.String, author: Schema.String, body: Schema.String })),
   commentsLoaded: Schema.Boolean,
   files: Schema.NullOr(Schema.Array(DiffFile)),
 })
 export type Item = typeof Item.Type
 
-export const Feed = Schema.Struct({
-  revision: Schema.optional(Nonnegative),
-  navigation: Schema.optional(Nonnegative),
+export const BrowserView = Schema.Struct({
   items: Schema.Array(Item),
   detail: Schema.optional(Item),
   selected: Schema.NullOr(Schema.String),
-  note: Schema.String,
   search: Schema.optional(
     Schema.Struct({
       query: Schema.String,
-      text: Schema.optional(Schema.String),
+      text: Schema.String,
       kind: Kind,
       page: Positive,
       total: Nonnegative,
@@ -56,6 +51,13 @@ export const Feed = Schema.Struct({
     }),
   ),
 })
+export type BrowserView = typeof BrowserView.Type
+
+export const Feed = Schema.Struct({
+  ...BrowserView.fields,
+  revision: Nonnegative,
+  navigation: Nonnegative,
+}).check(Schema.makeFilter((feed) => feed.search !== undefined || feed.items.length === 0))
 export type Feed = typeof Feed.Type
 
 export const SearchPage = Schema.Struct({
@@ -113,10 +115,8 @@ export const GitHub = Rpc.define({
         Schema.Struct({
           refresh: Schema.optional(Schema.Boolean),
           query: Schema.Trim.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
-          kind: Kind.pipe(Schema.withDecodingDefault(Effect.succeed("all"))),
-          page: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 20 })).pipe(
-            Schema.withDecodingDefault(Effect.succeed(1)),
-          ),
+          kind: Kind,
+          page: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 20 })),
         }),
       ),
       output: portable(SearchPage),
@@ -147,7 +147,7 @@ export const GitHub = Rpc.define({
   },
   events: {
     selected: {
-      schema: portable(Schema.Struct({ ...Session, feed: Feed, reveal: Schema.optional(Schema.Boolean) })),
+      schema: portable(Schema.Struct({ ...Session, feed: Feed, reveal: Schema.Boolean })),
     },
   },
 })

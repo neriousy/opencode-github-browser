@@ -5,6 +5,7 @@ import { ViewError } from "../../src/server/errors"
 import type { Feed } from "../../src/shared/rpc"
 import { reference } from "../../src/shared/url"
 import { testEffect } from "../helpers"
+import { detailFeed, searchFeed } from "../fixtures"
 
 function storage() {
   const values = new Map<string, Schema.Json>()
@@ -20,17 +21,24 @@ function storage() {
 const layer = FeedStore.layer.pipe(Layer.provide(Layer.sync(FeedStorage)(storage)))
 const it = testEffect(layer)
 const item = reference("https://github.com/owner/repo/issues/1")
-const initial = { items: [item], selected: item.url, note: "" }
+const initial = searchFeed([item])
 
-testEffect(Layer.empty)("existing repository searches and explicit pins still restore", () =>
+testEffect(Layer.empty)("restores saved repository searches and pinned details", () =>
   Effect.gen(function* () {
     const data = storage()
     const feed: Feed = {
       ...initial,
-      search: { query: "repo:owner/repo is:open", kind: "issue", page: 2, total: 342, incomplete: false },
+      search: {
+        query: "repo:owner/repo is:open",
+        text: "is:open",
+        kind: "issue",
+        page: 2,
+        total: 342,
+        incomplete: false,
+      },
       revision: 12,
     }
-    const pinned = { ...initial, note: "Pinned GitHub reference" }
+    const pinned = detailFeed(item)
     data.values.set("browser.v2/ses_search", { feed, pinned: null })
     data.values.set("browser.v2/ses_pin", { feed: pinned, pinned: item })
     const services = yield* Layer.build(FeedStore.layer.pipe(Layer.provide(Layer.succeed(FeedStorage)(data))))
@@ -84,8 +92,6 @@ it("a failed change does not poison the next writer", () =>
     expect(error.message).toBe("invalid selection")
     yield* store.update("ses_one", () => initial)
     expect((yield* store.current("ses_one"))?.revision).toBe(1)
-    expect(yield* store.update("ses_one", () => null)).toBeNull()
-    expect((yield* store.current("ses_one"))?.revision).toBe(1)
   }))
 
 testEffect(Layer.empty)("cancels a queued writer, releases its lock, and keeps other sessions independent", () =>
@@ -112,13 +118,13 @@ testEffect(Layer.empty)("cancels a queued writer, releases its lock, and keeps o
     const store = yield* Effect.service(FeedStore).pipe(Effect.provideContext(services))
     const first = yield* store.update("ses_blocked", () => initial).pipe(Effect.forkChild)
     yield* Deferred.await(entered)
-    const queued = yield* store.update("ses_blocked", () => ({ ...initial, note: "cancelled" })).pipe(Effect.forkChild)
+    const queued = yield* store.update("ses_blocked", () => ({ ...initial, selected: item.url })).pipe(Effect.forkChild)
     yield* store.update("ses_other", () => initial)
     expect((yield* store.current("ses_other"))?.revision).toBe(1)
     yield* Fiber.interrupt(queued)
     yield* Deferred.succeed(release, undefined)
     yield* Fiber.join(first)
-    yield* store.update("ses_blocked", () => ({ ...initial, note: "after cancellation" }))
+    yield* store.update("ses_blocked", () => initial)
     expect((yield* store.current("ses_blocked"))?.revision).toBe(2)
   }),
 )

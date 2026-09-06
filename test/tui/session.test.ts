@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { OpenCode } from "@opencode-ai/client"
 import { createIssueSession } from "../../src/tui/session"
 import { reference } from "../../src/shared/url"
+import { detailFeed } from "../fixtures"
 
 const location = { directory: "/fixture/worktree", workspaceID: "workspace_fixture" }
 const item = {
@@ -35,8 +36,7 @@ for (const loaded of [true, false]) {
               },
             })
           if (path.endsWith("/read")) return Response.json({ output: { part: "details", item } })
-          if (path.endsWith("/pin") || path.endsWith("/saveRead"))
-            return Response.json({ output: { items: [], detail: item, selected: item.url, note: "" } })
+          if (path.endsWith("/pin") || path.endsWith("/saveRead")) return Response.json({ output: detailFeed(item) })
           throw new Error(`Unexpected request: ${path}`)
         },
         { preconnect: () => {} },

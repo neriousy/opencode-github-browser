@@ -3,7 +3,7 @@ import type { SessionContext } from "@opencode-ai/plugin/effect/session"
 import { Session } from "@opencode-ai/schema/session"
 import { Plugin } from "@opencode-ai/plugin/effect"
 import { Effect, Layer } from "effect"
-import { GitHub, errorMessage, type Feed, type Item } from "../shared/rpc"
+import { GitHub, errorMessage, type BrowserView, type Item } from "../shared/rpc"
 import { FeedStorage, FeedStore, type Snapshot } from "./store"
 import { GhCommand, GitHubClient } from "./github"
 import { ImageDownload, Images } from "./images"
@@ -41,22 +41,19 @@ export const activate = (ctx: ServerContext) =>
       const images = yield* Images
       const update = Effect.fn("GitHubBrowser.update")(function* (
         sessionID: string,
-        change: (snapshot: Snapshot) => Feed | ViewError | null,
+        change: (snapshot: Snapshot) => BrowserView | ViewError,
         options: { reveal?: boolean; pin?: Item } = {},
       ) {
         const feed = yield* store.update(sessionID, change, options)
-        if (feed)
-          yield* registration.events
-            .emit("selected", { sessionID, feed, reveal: options.reveal ?? false })
-            .pipe(
-              Effect.catch((error) =>
-                Effect.logWarning("GitHub view saved; notification failed", { message: errorMessage(error) }),
-              ),
-            )
+        yield* registration.events
+          .emit("selected", { sessionID, feed, reveal: options.reveal ?? false })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("GitHub view saved; notification failed", { message: errorMessage(error) }),
+            ),
+          )
         return feed
       })
-      const required = (feed: Feed | null) =>
-        feed ? Effect.succeed(feed) : Effect.fail(new ViewError({ message: "Could not update the GitHub view." }))
       const registration: RpcRegistration<typeof GitHub> = yield* ctx.rpc.register(GitHub, {
         image: (input, call) =>
           images.load(input.url).pipe(Effect.mapError((error) => call.error("unavailable", errorMessage(error), {}))),
@@ -69,7 +66,7 @@ export const activate = (ctx: ServerContext) =>
             yield* ctx.session.get({ sessionID: Session.ID.make(input.sessionID) })
             return yield* update(input.sessionID, (snapshot) => openView(snapshot, input.item), {
               pin: input.item,
-            }).pipe(Effect.flatMap(required))
+            })
           }).pipe(Effect.mapError((error) => call.error("unavailable", errorMessage(error), {}))),
         open: (input, call) =>
           Effect.gen(function* () {
@@ -77,9 +74,7 @@ export const activate = (ctx: ServerContext) =>
             const identity = githubURL(input.url)
             if (!identity) return yield* new ViewError({ message: "Enter a GitHub issue or pull request URL." })
             const requested = reference(identity.url)
-            return yield* update(input.sessionID, (snapshot) => openView(snapshot, requested), { reveal: true }).pipe(
-              Effect.flatMap(required),
-            )
+            return yield* update(input.sessionID, (snapshot) => openView(snapshot, requested), { reveal: true })
           }).pipe(Effect.mapError((error) => call.error("unavailable", errorMessage(error), {}))),
         search: (input, call) =>
           reader
@@ -94,14 +89,12 @@ export const activate = (ctx: ServerContext) =>
             yield* ctx.session.get({ sessionID: Session.ID.make(input.sessionID) })
             return yield* update(input.sessionID, (snapshot) => searchView(snapshot, input.pages, input.text), {
               reveal: input.navigate,
-            }).pipe(Effect.flatMap(required))
+            })
           }).pipe(Effect.mapError((error) => call.error("unavailable", errorMessage(error), {}))),
         saveRead: (input, call) =>
           Effect.gen(function* () {
             yield* ctx.session.get({ sessionID: Session.ID.make(input.sessionID) })
-            return yield* update(input.sessionID, (snapshot) => readView(snapshot, input.result)).pipe(
-              Effect.flatMap(required),
-            )
+            return yield* update(input.sessionID, (snapshot) => readView(snapshot, input.result))
           }).pipe(Effect.mapError((error) => call.error("unavailable", errorMessage(error), {}))),
       })
 

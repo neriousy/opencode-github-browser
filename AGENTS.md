@@ -14,7 +14,8 @@ Follow the OpenCode v2 conventions in `../opencode/AGENTS.md` when applicable. T
 - Validate unknown input at its owning boundary with Effect Schema. Use the Standard Schema adapter for schemas shared with the TUI's portable RPC client. Keep pure normalization synchronous.
 - Avoid `any`, type assertions, non-null assertions, TypeScript namespaces, renamed imports, and star imports. Prefer inference, `const`, early returns, and functional array operations.
 - Do not add service accessor wrappers or abstractions without a concrete use. Keep helpers near the code they support.
-- Preserve per-session serialization, durable cache compatibility, monotonic revisions, cancellation, and navigation history. Different sessions must not block each other.
+- Target the current browser model and pinned host API. Do not add legacy RPC adapters, old-format migrations, or compatibility defaults for obsolete data shapes.
+- Preserve per-session serialization, durable browser state, monotonic revisions, cancellation, and navigation history. Different sessions must not block each other.
 - Use semantic theme tokens. Keep keyboard shortcuts inactive when the GitHub pane is unfocused. Check narrow and wide terminals, empty/loading/error states, and the Back path.
 - Keep the OpenTUI link compatibility adapter isolated. Preserve text selection and unrelated links.
 - Test real services/components with injected boundaries, not duplicated implementations or global mocks. Use the Bun Effect test boundary like OpenCode.

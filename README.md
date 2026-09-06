@@ -52,7 +52,7 @@ For direct search, click **/ search** or press `/` inside the focused panel and 
 | `/`                              | Search GitHub directly through gh                            |
 | `m`                              | Load the next page of search results                         |
 | `s`                              | Filter the results already displayed                         |
-| `x`                              | Clear local text and Issues/PRs filters                      |
+| `x`                              | Clear the local text filter                                  |
 | `r`                              | Open referenced issues/PRs; retry when a request failed      |
 | Tab                              | Browse Issues / PRs                                          |
 | `f`                              | Toggle panel fullscreen                                      |
@@ -99,7 +99,7 @@ Only explicit browsing actions fetch data. Pure search/read RPCs never save sess
 
 Successful GitHub responses are cached for one minute in the server plugin instance, with up to 128 entries. Repository detection is cached for five minutes. Identical concurrent reads reuse the completed response; different queries, pages, kinds, and project directories remain separate. Failed requests are not retained. Canceling a request interrupts its CLI operation.
 
-The server persists only the latest browser view and an explicitly pinned conversation item. It does not archive every browsed item in a second per-session cache. Reopening a panel restores its previous contents; TanStack retains recently loaded searches and item parts for reuse. Browser state uses a fresh storage namespace, so old automatically collected data is not restored. Press `l` to refresh the current list or details; refreshing a list starts at page one. Existing content remains visible if a refresh fails.
+The server persists only the latest browser view and an explicitly pinned conversation item. Reopening a panel restores its previous contents; TanStack retains recently loaded searches and item parts for reuse. Saved views and RPC responses use the current schema, including required revision markers and the original search text. Press `l` to refresh the current list or details; refreshing a list starts at page one. Existing content remains visible if a refresh fails.
 
 ## Development
 
@@ -125,7 +125,7 @@ test/
   helpers.ts
 ```
 
-Server and TUI modules depend on shared contracts; shared code does not depend on either runtime. Tests mirror these folders. The root entrypoints keep the package's existing exports stable.
+Server and TUI modules depend on shared contracts; shared code does not depend on either runtime. Tests mirror these folders. The root entrypoints expose the server plugin, TUI plugin, and RPC contract.
 
 - `src/server/github.ts`: `GhCommand` owns the interruptible CLI boundary; `GitHubClient` owns read/search operations and response validation.
 - `src/server/images.ts`: authenticated attachment downloads, bounded image caching, and cancellation.

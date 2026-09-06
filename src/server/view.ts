@@ -1,9 +1,9 @@
-import type { Feed, Item, ReadResult, SearchPage } from "../shared/rpc"
+import type { BrowserView, Item, ReadResult, SearchPage } from "../shared/rpc"
 import { githubURL, reference } from "../shared/url"
 import { ViewError } from "./errors"
 import type { Snapshot } from "./store"
 
-export function openView(snapshot: Snapshot, requested: Item): Feed {
+export function openView(snapshot: Snapshot, requested: Item): BrowserView {
   const item =
     [
       ...(snapshot.feed?.detail ? [snapshot.feed.detail] : []),
@@ -12,14 +12,13 @@ export function openView(snapshot: Snapshot, requested: Item): Feed {
     ].find((item) => identityKey(item) === identityKey(requested)) ?? requested
   return {
     ...snapshot.feed,
-    items: snapshot.feed?.search ? snapshot.feed.items : [],
+    items: snapshot.feed?.items ?? [],
     detail: item,
     selected: item.url,
-    note: snapshot.feed?.note ?? "GitHub",
   }
 }
 
-export function readView(snapshot: Snapshot, result: ReadResult): Feed | ViewError {
+export function readView(snapshot: Snapshot, result: ReadResult): BrowserView | ViewError {
   const url = result.part === "details" ? result.item.url : result.url
   const identity = githubURL(url)
   if (!identity) return new ViewError({ message: "Unsupported GitHub issue or pull request URL." })
@@ -43,11 +42,10 @@ export function readView(snapshot: Snapshot, result: ReadResult): Feed | ViewErr
     items: (snapshot.feed?.items ?? []).map((row) => (identityKey(row) === identityKey(item) ? item : row)),
     detail: item,
     selected: old?.repository === item.repository && old.number === item.number ? item.url : (selected ?? null),
-    note: snapshot.feed?.note ?? "GitHub",
   }
 }
 
-export function searchView(snapshot: Snapshot, pages: readonly SearchPage[], text: string): Feed | ViewError {
+export function searchView(snapshot: Snapshot, pages: readonly SearchPage[], text: string): BrowserView | ViewError {
   const first = pages[0]
   const last = pages.at(-1)
   if (
@@ -67,7 +65,6 @@ export function searchView(snapshot: Snapshot, pages: readonly SearchPage[], tex
   return {
     items: [...new Map(items.map((item) => [identityKey(item), item])).values()],
     selected: null,
-    note: `GitHub search · ${last.query}`,
     search: {
       query: last.query,
       text,

@@ -4,10 +4,11 @@ import { Schema } from "effect"
 import { browserQueries, createQueryClient } from "../../src/tui/query"
 import { Kind, Part, type Feed, type SearchPage } from "../../src/shared/rpc"
 import { reference } from "../../src/shared/url"
+import { emptyFeed } from "../fixtures"
 
 const location = { directory: "/fixture" }
 const item = { ...reference("https://github.com/owner/repo/pull/42"), body: "Details", bodyLoaded: true }
-const empty: Feed = { items: [], selected: null, note: "" }
+const empty = emptyFeed
 
 function client(response: (request: Request) => Promise<Response>) {
   return OpenCode.make({
@@ -224,7 +225,8 @@ test("infinite searches cache loaded pages, resume saved pagination, and refresh
   const saved = (pages: SearchPage[]): Feed => ({
     items: pages.flatMap((page) => page.items),
     selected: null,
-    note: "",
+    revision: 1,
+    navigation: 1,
     search: { ...page(pages.length), text: "is:open" },
   })
   try {

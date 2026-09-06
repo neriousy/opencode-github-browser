@@ -15,6 +15,7 @@ import { openView, readView, searchView } from "../../src/server/view"
 import { reference } from "../../src/shared/url"
 import { linkAt, registerLinks } from "../../src/tui/links"
 import { browserQueries, createQueryClient } from "../../src/tui/query"
+import { detailFeed, emptyFeed, searchFeed } from "../fixtures"
 
 function fixture(
   feed: Feed,
@@ -199,12 +200,13 @@ for (const width of [32, 100]) {
       body: "## Environment\n\n**Bold _and italic_** with ~~old~~ and `#900`.\n\n- [x] Done\n- See #43 and other/project#12.\n\n| Related | Status |\n| --- | --- |\n| #44 | Ready |",
       comments: [
         {
+          id: "1",
           author: "reviewer",
           body: "> Duplicates:\n> - **#45** is related.\n> - <https://github.com/other/project/pull/46?email_token=fixture>\n\n[More context](https://github.com/owner/repo/issues/47) &amp; \\#901.\n\n[External #902](https://example.com)\n\n```ts\nconst example = '#903'\n```",
         },
       ],
     }
-    const feed = { items: [item], selected: item.url, note: "", revision: 1, navigation: 1 }
+    const feed = detailFeed(item)
     const app = fixture(feed)
     const opened: string[] = []
     const rendered = await testRender(
@@ -283,15 +285,11 @@ test("clicking a discussion reference and the keyboard picker preserve the Back 
   const item = {
     ...issue,
     body: Array.from({ length: 30 }, (_, index) => `Paragraph ${index}.`).join("\n\n"),
-    comments: [{ author: "reviewer", body: "Related: #43" }],
+    comments: [{ id: "1", author: "reviewer", body: "Related: #43" }],
   }
   const [feed, setFeed] = createSignal<Feed>({
-    items: [item],
+    ...searchFeed([item]),
     selected: item.url,
-    note: "",
-    revision: 1,
-    navigation: 1,
-    search: { query: "repo:owner/repo is:open", kind: "issue", page: 1, total: 1, incomplete: false },
   })
   const app = fixture(feed())
   const opened: string[] = []
@@ -302,8 +300,8 @@ test("clicking a discussion reference and the keyboard picker preserve the Back 
       ...feed(),
       detail: pr,
       selected: pr.url,
-      revision: (feed().revision ?? 0) + 1,
-      navigation: (feed().navigation ?? 0) + 1,
+      revision: feed().revision + 1,
+      navigation: feed().navigation + 1,
     })
   }
   const rendered = await testRender(
@@ -352,16 +350,9 @@ test("clicking a discussion reference and the keyboard picker preserve the Back 
 })
 
 test("an explicit chat link opens details from repository results", async () => {
-  const initial: Feed = {
-    items: [issue],
-    selected: null,
-    note: "GitHub search · repo:owner/repo is:open",
-    revision: 1,
-    navigation: 1,
-    search: { query: "repo:owner/repo is:open", kind: "issue", page: 1, total: 1, incomplete: false },
-  }
+  const initial = searchFeed([issue])
   const [state, setState] = createStore({ feed: initial })
-  const opened: Feed = { ...initial, selected: issue.url, note: "GitHub", revision: 2, navigation: 2 }
+  const opened: Feed = { ...initial, detail: issue, selected: issue.url, revision: 2, navigation: 2 }
   const app = fixture(initial)
   const rendered = await testRender(
     () => (
@@ -416,12 +407,13 @@ for (const width of [32, 100]) {
       body: 'Before screenshot\n\n<img width="1292" height="822" alt="Panel screenshot" src="https://github.com/user-attachments/assets/body" />\n\nAfter screenshot',
       comments: [
         {
+          id: "1",
           author: "reviewer",
           body: "| Screenshot |\n| --- |\n| ![Comment screenshot](https://github.com/user-attachments/assets/comment) |",
         },
       ],
     }
-    const feed = { items: [item], selected: item.url, note: "", navigation: 1, revision: 1 }
+    const feed = detailFeed(item)
     const requests: Request[] = []
     const app = fixture(feed, async (request) => {
       requests.push(request)
@@ -475,12 +467,7 @@ for (const width of [32, 100]) {
 
 test("image failure leaves readable text, retries on click, and Back cancels a pending image", async () => {
   const item = { ...issue, body: "Description text\n\n![Attachment](https://github.com/user-attachments/assets/test)" }
-  const feed: Feed = {
-    items: [item],
-    selected: null,
-    note: "",
-    search: { query: "repo:owner/repo", kind: "issue", page: 1, total: 1, incomplete: false },
-  }
+  const feed = searchFeed([item])
   const requests: Request[] = []
   const app = fixture(feed, async (request) => {
     requests.push(request)
@@ -522,12 +509,7 @@ test("image failure leaves readable text, retries on click, and Back cancels a p
 
 for (const width of [45, 110]) {
   test(`reader navigation and empty filters at ${width} columns`, async () => {
-    const feed: Feed = {
-      items: [issue, pr],
-      selected: null,
-      note: "GitHub",
-      search: { query: "repo:owner/repo", kind: "all", page: 1, total: 2, incomplete: false },
-    }
+    const feed = searchFeed([{ ...issue, kind: "pr", url: issue.url.replace("/issues/", "/pull/") }, pr])
     const app = fixture(feed)
     const rendered = await testRender(
       () => (
@@ -570,7 +552,7 @@ for (const width of [45, 110]) {
 }
 
 test("inactive reader does not consume navigation keys", async () => {
-  const feed = { items: [issue], selected: null, note: "" }
+  const feed = searchFeed([issue])
   const app = fixture(feed)
   const rendered = await testRender(
     () => (
@@ -597,7 +579,7 @@ test("inactive reader does not consume navigation keys", async () => {
 })
 
 test("failed diff loads retry from details; pending reads cancel on Escape", async () => {
-  const feed: Feed = { revision: 1, items: [{ ...pr, files: null }], selected: pr.url, note: "" }
+  const feed = detailFeed({ ...pr, files: null })
   const requests: Request[] = []
   const app = fixture(feed, async (request) => {
     requests.push(request)
@@ -646,7 +628,7 @@ test("failed diff loads retry from details; pending reads cancel on Escape", asy
 
 test("opening a bare reference loads its details once and renders the description", async () => {
   const bare = reference(issue.url)
-  const feed: Feed = { revision: 1, items: [bare], selected: bare.url, note: "" }
+  const feed = detailFeed(bare)
   const requests: Request[] = []
   const app = fixture(feed, async (request) => {
     requests.push(request)
@@ -684,7 +666,7 @@ test("opening a bare reference loads its details once and renders the descriptio
 test("a details read cancelled by moving on runs again when the item is reopened", async () => {
   const first = reference("https://github.com/owner/repo/issues/1")
   const second = reference("https://github.com/owner/repo/issues/2")
-  const feed: Feed = { revision: 1, items: [first, second], selected: first.url, note: "" }
+  const feed: Feed = { ...searchFeed([first, second]), selected: first.url }
   const requests: Request[] = []
   const app = fixture(feed, async (request) => {
     requests.push(request)
@@ -735,7 +717,7 @@ test("a details read cancelled by moving on runs again when the item is reopened
 
 test("Escape leaves a cancelled bare reference idle until it is explicitly retried", async () => {
   const item = reference(issue.url)
-  const feed = { items: [item], selected: item.url, note: "", revision: 1 }
+  const feed = detailFeed(item)
   const requests: Request[] = []
   const app = fixture(feed, async (request) => {
     requests.push(request)
@@ -776,14 +758,7 @@ test("Escape leaves a cancelled bare reference idle until it is explicitly retri
 
 test("query cache refreshes cannot save a view or change the current selection", async () => {
   const cache = createQueryClient()
-  const feed: Feed = {
-    items: [issue],
-    selected: issue.url,
-    note: "",
-    revision: 1,
-    navigation: 1,
-    search: { query: "repo:owner/repo", kind: "issue", page: 1, total: 1, incomplete: false },
-  }
+  const feed: Feed = { ...searchFeed([issue]), selected: issue.url }
   const app = fixture(feed, async () => Response.json({ output: { part: "details", item: pr } }))
   const queries = browserQueries(cache, app.context.client)
   const rendered = await testRender(
@@ -821,17 +796,15 @@ test("query cache refreshes cannot save a view or change the current selection",
 
 for (const width of [45, 110]) {
   test(`ten long issues fit in a compact ${width}-column pane`, async () => {
-    const feed = {
-      items: Array.from({ length: 10 }, (_, index) => ({
+    const feed = searchFeed(
+      Array.from({ length: 10 }, (_, index) => ({
         ...issue,
         number: 100 + index,
         url: `https://github.com/owner/repo/issues/${100 + index}`,
         title: `Result ${index + 1}: A long title that should never wrap and consume the entire panel`,
         labels: ["bug", "tui", "2.0"],
       })),
-      selected: null,
-      note: "Ten recently updated issues with a very long explanation that used to consume the header.",
-    }
+    )
     const app = fixture(feed)
     const rendered = await testRender(
       () => (
@@ -853,10 +826,7 @@ for (const width of [45, 110]) {
       const frame = rendered.captureCharFrame()
       for (const item of feed.items) expect(frame).toContain(`#${item.number}  Result`)
       expect(frame.match(/owner\/repo/g)).toHaveLength(1)
-      expect(frame).not.toContain(" All ")
-      expect(frame).not.toContain("GitHub · selection")
-      expect(frame).toContain("10 selected")
-      expect(frame).not.toContain("recently updated")
+      expect(frame).toContain("10 of 10")
       expect(frame).toContain("? actions")
       await Bun.write(`captures/list-${width}.txt`, frame)
       await app.key("enter")
@@ -869,7 +839,7 @@ for (const width of [45, 110]) {
 }
 
 test("a split panel paints the host's elevated surface; fullscreen keeps the base tokens", async () => {
-  const feed = { items: [issue], selected: null, note: "" }
+  const feed = searchFeed([issue])
   const app = fixture(feed)
   const [presentation, setPresentation] = createSignal<"panel" | "fullscreen">("panel")
   const rendered = await testRender(
@@ -906,7 +876,7 @@ test("a split panel paints the host's elevated surface; fullscreen keeps the bas
 })
 
 test("the compact actions menu runs available actions and hides detail-only actions in the list", async () => {
-  const feed = { items: [pr], selected: null, note: "" }
+  const feed = searchFeed([pr])
   const app = fixture(feed)
   const rendered = await testRender(
     () => (
@@ -926,15 +896,11 @@ test("the compact actions menu runs available actions and hides detail-only acti
     app.choices.push("Open item in panel")
     await app.key("?")
     await rendered.renderOnce()
-    expect(app.menus[0]).not.toContain("Ask agent")
     expect(rendered.captureCharFrame()).toContain("Back to results")
     app.choices.push("View PR diff")
     await app.key("?")
     await rendered.renderOnce()
-    expect(app.menus[1]).not.toContain("Ask agent")
     expect(app.menus[1]).toContain("Open conversation about this item")
-    expect(app.menus[1]).not.toContain("Discuss item")
-    expect(app.menus[1]).not.toContain("Work on / review item")
     expect([...new Set(app.menuGroups[1])]).toEqual(["Browse", "Item", "View"])
     expect(rendered.captureCharFrame()).toContain("src/reader.ts")
     await rendered.waitForVisualIdle()
@@ -943,8 +909,8 @@ test("the compact actions menu runs available actions and hides detail-only acti
   }
 })
 
-test("t opens a conversation with the item; a no longer opens a separate request dialog", async () => {
-  const feed = { items: [issue], selected: null, note: "" }
+test("t opens a conversation with the selected item and location", async () => {
+  const feed = searchFeed([issue])
   const opened: unknown[] = []
   const requests: Request[] = []
   const app = fixture(feed, async (request) => {
@@ -970,9 +936,6 @@ test("t opens a conversation with the item; a no longer opens a separate request
   )
   try {
     await app.key("enter")
-    await app.key("a")
-    expect(app.menus).toEqual([])
-    expect(opened).toEqual([])
     await app.key("t")
     expect(opened).toEqual([{ item: issue, location: { directory: "/fixture" } }])
     expect(requests).toHaveLength(0)
@@ -982,12 +945,7 @@ test("t opens a conversation with the item; a no longer opens a separate request
 })
 
 test("a fresh panel loads current-repository issues and switches PRs through server search", async () => {
-  const feed: Feed = {
-    items: [issue],
-    selected: null,
-    note: "",
-    search: { query: "repo:owner/repo is:open", text: "is:open", kind: "issue", page: 1, total: 1, incomplete: false },
-  }
+  const feed = searchFeed([issue])
   const requests: { method: string; input: unknown }[] = []
   const requested = Schema.decodeUnknownSync(Schema.Struct({ input: Schema.Struct({ kind: Kind }) }))
   const app = fixture(feed, async (request) => {
@@ -997,7 +955,7 @@ test("a fresh panel loads current-repository issues and switches PRs through ser
     if (method === "current") return Response.json({ output: null })
     // Echo the requested kind the way the server does, so the active tab tracks it.
     const kind = requested(input).input.kind
-    return Response.json({ output: { ...feed.search, items: feed.items, kind } })
+    return Response.json({ output: { ...feed.search, items: kind === "pr" ? [pr] : [issue], kind } })
   })
   const rendered = await testRender(
     () => (
@@ -1018,7 +976,6 @@ test("a fresh panel loads current-repository issues and switches PRs through ser
     expect(requests.map((request) => request.method)).toEqual(["current", "search"])
     const frame = rendered.captureCharFrame()
     expect(frame).toContain(" Issues ")
-    expect(frame).not.toContain(" All ")
     expect(frame).toContain("1 of 1")
     expect(requests[1].input).toMatchObject({
       input: { query: "is:open", kind: "issue", page: 1 },
@@ -1035,29 +992,15 @@ test("a fresh panel loads current-repository issues and switches PRs through ser
   }
 })
 
-test("repository browsing preserves pagination and switches tabs without a chat selection action", async () => {
-  const results = {
-    items: Array.from({ length: 10 }, (_, index) => ({
+test("repository browsing preserves pagination across tab switches", async () => {
+  const feed = searchFeed(
+    Array.from({ length: 10 }, (_, index) => ({
       ...issue,
       number: index + 1,
       url: `https://github.com/owner/repo/issues/${index + 1}`,
     })),
-    note: "Repository results",
-  }
-  const feed: Feed = {
-    ...results,
-    selected: null,
-    revision: 1,
-    navigation: 1,
-    search: {
-      query: "repo:owner/repo is:open",
-      text: "is:open",
-      kind: "issue",
-      page: 1,
-      total: 342,
-      incomplete: false,
-    },
-  }
+    { total: 342 },
+  )
   const requests: { kind: string; page: number; query: string }[] = []
   const decode = Schema.decodeUnknownSync(
     Schema.Struct({ input: Schema.Struct({ kind: Kind, page: Schema.Number, query: Schema.String }) }),
@@ -1120,9 +1063,6 @@ test("repository browsing preserves pagination and switches tabs without a chat 
     await app.key("tab")
     await rendered.renderOnce()
     expect(requests).toHaveLength(3)
-    await app.key("?")
-    await rendered.renderOnce()
-    expect(app.menus.at(-1)).not.toContain("Restore selected results")
     expect(rendered.captureCharFrame()).toContain("100 of 342")
     expect(rendered.captureCharFrame()).toContain("Repository issue 100")
     expect(requests).toHaveLength(3)
@@ -1133,21 +1073,7 @@ test("repository browsing preserves pagination and switches tabs without a chat 
 
 test("rendering an agent's chat link never populates either cache; clicking it explicitly loads the item", async () => {
   const queryClient = createQueryClient()
-  const initial: Feed = {
-    items: [issue],
-    selected: null,
-    note: "Repository results",
-    revision: 1,
-    navigation: 1,
-    search: {
-      query: "repo:owner/repo label:bug",
-      text: "label:bug",
-      kind: "issue",
-      page: 1,
-      total: 1,
-      incomplete: false,
-    },
-  }
+  const initial = searchFeed([issue], { query: "repo:owner/repo label:bug", text: "label:bug" })
   const [feed, setFeed] = createSignal(initial)
   const paths: string[] = []
   const app = fixture(initial, async (request) => {
@@ -1234,7 +1160,7 @@ for (const width of [45, 110]) {
     const [feed, setFeed] = createSignal<Feed>()
     const searches: unknown[] = []
     const reads: string[] = []
-    const app = fixture({ items: [], selected: null, note: "" }, async (request) => {
+    const app = fixture(emptyFeed, async (request) => {
       const method = new URL(request.url).pathname.split("/").at(-1)
       if (method === "read") {
         const { input } = Schema.decodeUnknownSync(Schema.Struct({ input: Schema.Struct({ url: Schema.String }) }))(
@@ -1327,15 +1253,15 @@ for (const width of [45, 110]) {
 
 for (const width of [32, 45, 80]) {
   test(`refresh keeps saved rows below a separate loader at ${width} columns`, async () => {
-    const feed: Feed = {
-      items: [
-        { ...issue, title: "Long first title with enough words to wrap until THE END" },
-        { ...pr, title: "SECOND row with a very long title that must end with an ellipsis in the list" },
-      ],
-      selected: null,
-      note: "",
-      search: { query: "repo:owner/repo is:open", kind: "all", page: 1, total: 2, incomplete: false },
-    }
+    const feed = searchFeed([
+      { ...issue, title: "Long first title with enough words to wrap until THE END" },
+      {
+        ...issue,
+        number: 43,
+        url: "https://github.com/owner/repo/issues/43",
+        title: "SECOND row with a very long title that must end with an ellipsis in the list",
+      },
+    ])
     const requests: unknown[] = []
     const app = fixture(feed, async (request) => {
       requests.push(await request.json())
@@ -1387,7 +1313,7 @@ for (const width of [32, 45, 80]) {
 }
 
 test("an empty pending search shows placeholders instead of the empty-state instructions", async () => {
-  const feed: Feed = { items: [], selected: null, note: "" }
+  const feed = emptyFeed
   const app = fixture(
     feed,
     async (request) =>
@@ -1425,12 +1351,7 @@ test("an empty pending search shows placeholders instead of the empty-state inst
 })
 
 test("first open stays in loading from saved-view lookup through the initial search", async () => {
-  const feed: Feed = {
-    items: [issue],
-    selected: null,
-    note: "",
-    search: { query: "repo:owner/repo is:open", text: "is:open", kind: "issue", page: 1, total: 1, incomplete: false },
-  }
+  const feed = searchFeed([issue])
   const current = Promise.withResolvers<Response>()
   const search = Promise.withResolvers<Response>()
   const searching = Promise.withResolvers<void>()
@@ -1458,7 +1379,6 @@ test("first open stays in loading from saved-view lookup through the initial sea
     const first = rendered.captureCharFrame()
     expect(first).toContain("Opening GitHub")
     expect(first).not.toContain("Search GitHub or open")
-    expect(first).not.toContain(" All ")
     current.resolve(Response.json({ output: null }))
     await searching.promise
     await rendered.renderOnce()
@@ -1480,7 +1400,7 @@ test("first open stays in loading from saved-view lookup through the initial sea
 test("Escape cancels the saved-view lookup and ignores its late reply", async () => {
   const current = Promise.withResolvers<Response>()
   const requests: Request[] = []
-  const feed = { items: [issue], selected: null, note: "" }
+  const feed = searchFeed([issue])
   const app = fixture(feed, async (request) => {
     requests.push(request)
     return current.promise
@@ -1513,12 +1433,7 @@ test("Escape cancels the saved-view lookup and ignores its late reply", async ()
 })
 
 test("a failed first-open lookup stops loading and Retry restores the saved view", async () => {
-  const feed: Feed = {
-    items: [pr],
-    selected: null,
-    note: "Repository results",
-    search: { query: "repo:owner/repo", kind: "pr", page: 1, total: 1, incomplete: false },
-  }
+  const feed = searchFeed([pr])
   let count = 0
   const app = fixture(feed, async () =>
     ++count === 1
@@ -1556,7 +1471,7 @@ test("a failed first-open lookup stops loading and Retry restores the saved view
 test("closing during first-open session creation cannot start a search afterwards", async () => {
   const creating = Promise.withResolvers<Response>()
   const paths: string[] = []
-  const app = fixture({ items: [], selected: null, note: "" }, async (request) => {
+  const app = fixture(emptyFeed, async (request) => {
     paths.push(new URL(request.url).pathname)
     return creating.promise
   })

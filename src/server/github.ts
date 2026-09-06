@@ -153,7 +153,7 @@ export class GitHubClient extends Context.Service<GitHubClient>()("github-browse
             "GET",
             "search/issues",
             "-f",
-            `q=${resolved}${kind === "all" ? "" : ` is:${kind}`}`,
+            `q=${resolved} is:${kind}`,
             "-f",
             `per_page=${SEARCH_PAGE_SIZE}`,
             "-f",

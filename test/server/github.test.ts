@@ -127,12 +127,12 @@ for (const query of ["repo:other/project bug", "org:other bug", "user:other bug"
   testEffect(
     client('{"items":[],"total_count":0,"incomplete_results":false}', (args) => {
       expect(args[0]).toBe("api")
-      expect(args).toContain(`q=${query}`)
+      expect(args).toContain(`q=${query} is:issue`)
     }),
   )(`explicit scope bypasses current-repository detection: ${query}`, () =>
     Effect.gen(function* () {
       const github = yield* GitHubClient
-      expect((yield* github.search(query, "all", 1, "/not-a-repo")).query).toBe(query)
+      expect((yield* github.search(query, "issue", 1, "/not-a-repo")).query).toBe(query)
     }),
   )
 }

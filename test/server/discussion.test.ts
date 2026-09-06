@@ -5,6 +5,7 @@ import { discussionContext } from "../../src/server/discussion"
 import { FeedStorage, FeedStore } from "../../src/server/store"
 import { reference } from "../../src/shared/url"
 import { testEffect } from "../helpers"
+import { detailFeed, searchFeed } from "../fixtures"
 
 const layer = FeedStore.layer.pipe(
   Layer.provide(
@@ -46,21 +47,21 @@ it("conversation context survives browsing away, uses fresh comments, and resolv
   Effect.gen(function* () {
     const store = yield* FeedStore
     const source = session({ "github-browser.reference": item.url.replace("/pull/", "/issues/") })
-    yield* store.update(sessionID, () => ({ items: [item], selected: item.url, note: "" }), { pin: item })
+    yield* store.update(sessionID, () => detailFeed(item), { pin: item })
     const first = yield* discussionContext(source, sessionID)
     expect(first).toContain(item.body)
     expect(first).toContain(item.url)
 
-    yield* store.update(sessionID, () => ({
-      items: [{ ...item, comments: [{ author: "reviewer", body: "New discussion comment" }], commentsLoaded: true }],
-      selected: item.url,
-      note: "",
-    }))
-    yield* store.update(sessionID, () => ({
-      items: [reference("https://github.com/other/project/issues/1")],
-      selected: null,
-      note: "Another repository",
-    }))
+    yield* store.update(sessionID, () =>
+      detailFeed({
+        ...item,
+        comments: [{ id: "1", author: "reviewer", body: "New discussion comment" }],
+        commentsLoaded: true,
+      }),
+    )
+    yield* store.update(sessionID, () =>
+      searchFeed([reference("https://github.com/other/project/issues/1")], { query: "repo:other/project is:open" }),
+    )
     const before = yield* store.current(sessionID)
     const next = yield* discussionContext(source, sessionID)
     expect(next).toContain("New discussion comment")
@@ -72,7 +73,7 @@ it("conversation context survives browsing away, uses fresh comments, and resolv
 it("ordinary browser sessions never inject context, and pinned context is isolated by session", () =>
   Effect.gen(function* () {
     const store = yield* FeedStore
-    yield* store.update(sessionID, () => ({ items: [item], selected: item.url, note: "" }), { pin: item })
+    yield* store.update(sessionID, () => detailFeed(item), { pin: item })
     expect(yield* discussionContext(session(), sessionID)).toBeUndefined()
     expect(yield* discussionContext(session({ "github-browser.reference": 42 }), sessionID)).toBeUndefined()
     const other = yield* discussionContext(

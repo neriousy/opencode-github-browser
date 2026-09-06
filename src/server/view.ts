@@ -3,14 +3,33 @@ import { githubURL, reference } from "../shared/url"
 import { ViewError } from "./errors"
 import type { Snapshot } from "./store"
 
+export function openView(snapshot: Snapshot, requested: Item): Feed {
+  const item =
+    [
+      ...(snapshot.feed?.detail ? [snapshot.feed.detail] : []),
+      ...(snapshot.feed?.items ?? []),
+      ...(snapshot.pinned ? [snapshot.pinned] : []),
+    ].find((item) => identityKey(item) === identityKey(requested)) ?? requested
+  return {
+    ...snapshot.feed,
+    items: snapshot.feed?.search ? snapshot.feed.items : [],
+    detail: item,
+    selected: item.url,
+    note: snapshot.feed?.note ?? "GitHub",
+  }
+}
+
 export function readView(snapshot: Snapshot, result: ReadResult): Feed | ViewError {
   const url = result.part === "details" ? result.item.url : result.url
   const identity = githubURL(url)
   if (!identity) return new ViewError({ message: "Unsupported GitHub issue or pull request URL." })
   const previous =
-    [...(snapshot.feed?.items ?? []), ...(snapshot.pinned ? [snapshot.pinned] : [])].find(
-      (item) => item.repository === identity.repository && item.number === identity.number,
-    ) ?? reference(identity.url)
+    [
+      ...(snapshot.feed?.detail ? [snapshot.feed.detail] : []),
+      ...(snapshot.feed?.items ?? []),
+      ...(snapshot.pinned ? [snapshot.pinned] : []),
+    ].find((item) => item.repository === identity.repository && item.number === identity.number) ??
+    reference(identity.url)
   const item: Item =
     result.part === "details"
       ? mergeDetails(previous, result.item)
@@ -21,7 +40,8 @@ export function readView(snapshot: Snapshot, result: ReadResult): Feed | ViewErr
   const old = selected ? githubURL(selected) : undefined
   return {
     ...snapshot.feed,
-    items: [...new Map([...(snapshot.feed?.items ?? []), item].map((row) => [identityKey(row), row])).values()],
+    items: (snapshot.feed?.items ?? []).map((row) => (identityKey(row) === identityKey(item) ? item : row)),
+    detail: item,
     selected: old?.repository === item.repository && old.number === item.number ? item.url : (selected ?? null),
     note: snapshot.feed?.note ?? "GitHub",
   }
@@ -37,10 +57,11 @@ export function searchView(snapshot: Snapshot, pages: readonly SearchPage[], tex
   )
     return new ViewError({ message: "The search changed. Retry from the current search." })
   const previous = new Map(
-    [...(snapshot.pinned ? [snapshot.pinned] : []), ...(snapshot.feed?.items ?? [])].map((item) => [
-      identityKey(item),
-      item,
-    ]),
+    [
+      ...(snapshot.pinned ? [snapshot.pinned] : []),
+      ...(snapshot.feed?.items ?? []),
+      ...(snapshot.feed?.detail ? [snapshot.feed.detail] : []),
+    ].map((item) => [identityKey(item), item]),
   )
   const items = pages.flatMap((page) => page.items.map((item) => mergeDetails(previous.get(identityKey(item)), item)))
   return {

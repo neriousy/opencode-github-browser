@@ -78,7 +78,7 @@ export class FeedStore extends Context.Service<FeedStore>()("github-browser/Feed
               yield* save(sessionID, {
                 feed,
                 pinned: pinned
-                  ? (feed.items.find(
+                  ? ([...(feed.detail ? [feed.detail] : []), ...feed.items].find(
                       (item) => item.repository === pinned.repository && item.number === pinned.number,
                     ) ?? pinned)
                   : null,

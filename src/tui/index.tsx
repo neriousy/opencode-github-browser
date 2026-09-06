@@ -84,7 +84,8 @@ export default Plugin.define({
       update((draft) => {
         draft.feeds[event.data.sessionID] = event.data.feed
         // An /issues/N link can resolve to /pull/N. Reuse the same tab for either URL.
-        const item = event.data.feed.items.find((item) => item.url === event.data.feed.selected)
+        const item =
+          event.data.feed.detail ?? event.data.feed.items.find((item) => item.url === event.data.feed.selected)
         if (
           item?.kind === "pr" &&
           draft.tabs[`${event.location.directory}:${item.url.replace("/pull/", "/issues/")}`] === event.data.sessionID

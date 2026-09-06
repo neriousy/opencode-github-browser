@@ -42,6 +42,7 @@ export const Feed = Schema.Struct({
   revision: Schema.optional(Nonnegative),
   navigation: Schema.optional(Nonnegative),
   items: Schema.Array(Item),
+  detail: Schema.optional(Item),
   selected: Schema.NullOr(Schema.String),
   note: Schema.String,
   search: Schema.optional(

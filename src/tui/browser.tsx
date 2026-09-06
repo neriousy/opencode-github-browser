@@ -12,7 +12,7 @@ import { ellipsis } from "./text"
 import { PullRequestDiff } from "./diff"
 import { GitHubMarkdown } from "./markdown"
 import { markdownReferences } from "./markdown-text"
-import { githubURL } from "../shared/url"
+import { githubURL, reference } from "../shared/url"
 import type { QueryClient } from "@tanstack/query-core"
 import { browserQueries, createQueryClient } from "./query"
 
@@ -126,7 +126,15 @@ export function Browser(props: {
     const repositories = new Set(state.feed.items.map((item) => item.repository))
     return repositories.size === 1 ? state.feed.items[0]?.repository : undefined
   })
-  const selected = createMemo(() => state.feed.items.find((item) => item.url === state.selected))
+  const selected = createMemo(() => {
+    const identity = state.selected ? githubURL(state.selected) : undefined
+    if (!identity) return
+    return (
+      [...(state.feed.detail ? [state.feed.detail] : []), ...state.feed.items].find(
+        (item) => item.repository === identity.repository && item.number === identity.number,
+      ) ?? reference(identity.url)
+    )
+  })
   const activeTab = () => (!state.feed.search && state.feed.items.length ? undefined : state.kind)
   const tabs: Item["kind"][] = ["issue", "pr"]
   const mixed = createMemo(() => new Set(items().map((item) => item.kind)).size > 1)
@@ -280,13 +288,14 @@ export function Browser(props: {
     const requested = explicit || (initial && serverSelection !== feed.selected) ? feed.selected : state.selected
     const identity = requested ? githubURL(requested) : undefined
     const selection =
-      feed.items.find((item) => item.url === requested)?.url ??
-      feed.items.find((item) => identity && item.repository === identity.repository && item.number === identity.number)
-        ?.url ??
+      [...(feed.detail ? [feed.detail] : []), ...feed.items].find(
+        (item) => identity && item.repository === identity.repository && item.number === identity.number,
+      )?.url ??
+      identity?.url ??
       null
     serverSelection = feed.selected
     serverNavigation = feed.navigation
-    if (selection && selection !== state.selected && state.feed.items.length) {
+    if (selection && selection !== state.selected && (state.selected || state.feed.search)) {
       const previous = state.selected ? githubURL(state.selected) : undefined
       if (!previous || previous.repository !== identity?.repository || previous.number !== identity?.number)
         navigate(selection)
@@ -294,7 +303,7 @@ export function Browser(props: {
     if (explicit) setState({ diff: false, ...(selection ? {} : { history: [] }) })
     setState({
       feed,
-      selected: feed.items.some((item) => item.url === selection) ? selection : null,
+      selected: selection,
       // A server search already scoped the results; the tab must reflect it.
       kind: feed.search?.kind ?? "all",
     })
@@ -317,7 +326,7 @@ export function Browser(props: {
       async (signal) => {
         const saved = await context.client.rpc(GitHub).current({ sessionID }, { location: location(), signal })
         if (disposed || signal.aborted) return
-        if (saved) {
+        if (saved && (saved.search || saved.selected)) {
           apply(saved)
           return
         }
@@ -488,14 +497,21 @@ export function Browser(props: {
     pausedRead = undefined
     const previous = state.history.at(-1)
     if (previous) {
-      const selected = state.feed.items.some((item) => item.url === previous.selected) ? previous.selected : null
-      setState({ selected, index: previous.index, history: state.history.slice(0, -1) })
+      setState({ selected: previous.selected, index: previous.index, history: state.history.slice(0, -1) })
       scrollTo(previous.scroll)
+      if (!previous.selected && !state.feed.search) {
+        setState("feed", { ...state.feed, items: [] })
+        return searchRequest("is:open", "issue")
+      }
       return
     }
     if (state.selected) {
       setState("selected", null)
       scrollTo(0)
+      if (!state.feed.search) {
+        setState("feed", { ...state.feed, items: [] })
+        return searchRequest("is:open", "issue")
+      }
       return
     }
     props.close()

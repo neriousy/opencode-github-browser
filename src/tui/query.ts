@@ -11,6 +11,7 @@ import {
   SEARCH_PAGE_SIZE,
   type Feed,
   type Kind,
+  type Item,
   type Part,
   type ReadResult,
   type SearchPage,
@@ -42,32 +43,38 @@ export function browserQueries(cache: QueryClient, client: BrowserHost["client"]
     const identity = githubURL(url)
     return ["github", location, "read", identity?.repository ?? url, identity?.number, part]
   }
+  const withItemParts = (location: Location, item: Item): Item => {
+    const comments = cache.getQueryData<ReadResult>(readKey(location, item.url, "comments"))
+    const diff = cache.getQueryData<ReadResult>(readKey(location, item.url, "diff"))
+    return {
+      ...item,
+      ...(comments?.part === "comments" ? { comments: comments.comments, commentsLoaded: true } : {}),
+      ...(diff?.part === "diff" ? { files: diff.files } : {}),
+    }
+  }
   const withParts = <PageParam>(location: Location, data: InfiniteData<SearchPage, PageParam>) => ({
     ...data,
     pages: data.pages.map((page) => ({
       ...page,
-      items: page.items.map((item) => {
-        const comments = cache.getQueryData<ReadResult>(readKey(location, item.url, "comments"))
-        const diff = cache.getQueryData<ReadResult>(readKey(location, item.url, "diff"))
-        return {
-          ...item,
-          ...(comments?.part === "comments" ? { comments: comments.comments, commentsLoaded: true } : {}),
-          ...(diff?.part === "diff" ? { files: diff.files } : {}),
-        }
-      }),
+      items: page.items.map((item) => withItemParts(location, item)),
     })),
   })
   return {
     readState: (location: Location, url: string, part: typeof Part.Type) =>
       cache.getQueryState(readKey(location, url, part)),
-    read: (location: Location, url: string, part: typeof Part.Type, refresh: boolean, signal: AbortSignal) => {
+    read: async (location: Location, url: string, part: typeof Part.Type, refresh: boolean, signal: AbortSignal) => {
       const options = {
         queryKey: readKey(location, url, part),
         queryFn: ({ signal }: QueryFunctionContext) =>
           rpc.read({ url, part, ...(refresh ? { refresh } : {}) }, { location, signal }),
         ...(refresh ? { staleTime: 0 } : {}),
       }
-      return observed(new QueryObserver(cache, { ...options, enabled: false }), () => cache.fetchQuery(options), signal)
+      const result = await observed(
+        new QueryObserver(cache, { ...options, enabled: false }),
+        () => cache.fetchQuery(options),
+        signal,
+      )
+      return result.part === "details" ? { ...result, item: withItemParts(location, result.item) } : result
     },
     search: async (
       location: Location,
@@ -98,8 +105,8 @@ export function browserQueries(cache: QueryClient, client: BrowserHost["client"]
         ...(refresh ? { staleTime: 0, pages: 1 } : {}),
       }
       const observer = new InfiniteQueryObserver(cache, { ...options, enabled: false })
-      // Saved views may also contain explicitly opened references. Rebuild missing
-      // search pages through the RPC rather than seeding queries from those rows.
+      // Rebuild missing pages through the RPC so the query cache contains actual
+      // paginated search responses, including when resuming a saved view.
       if (!more || !cached || cached.pages.length < count)
         return withParts(
           location,

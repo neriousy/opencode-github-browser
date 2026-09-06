@@ -11,7 +11,7 @@ import { ViewError } from "./errors"
 import { githubURL, reference } from "../shared/url"
 import { discussionContext } from "./discussion"
 import { Reader } from "./reader"
-import { readView, searchView } from "./view"
+import { openView, readView, searchView } from "./view"
 
 type ServerContext = {
   location: { readonly directory: string }
@@ -67,15 +67,9 @@ export const activate = (ctx: ServerContext) =>
         pin: (input, call) =>
           Effect.gen(function* () {
             yield* ctx.session.get({ sessionID: Session.ID.make(input.sessionID) })
-            return yield* update(
-              input.sessionID,
-              () => ({
-                items: [input.item],
-                selected: input.item.url,
-                note: "Pinned GitHub reference",
-              }),
-              { pin: input.item },
-            ).pipe(Effect.flatMap(required))
+            return yield* update(input.sessionID, (snapshot) => openView(snapshot, input.item), {
+              pin: input.item,
+            }).pipe(Effect.flatMap(required))
           }).pipe(Effect.mapError((error) => call.error("unavailable", errorMessage(error), {}))),
         open: (input, call) =>
           Effect.gen(function* () {
@@ -83,22 +77,9 @@ export const activate = (ctx: ServerContext) =>
             const identity = githubURL(input.url)
             if (!identity) return yield* new ViewError({ message: "Enter a GitHub issue or pull request URL." })
             const requested = reference(identity.url)
-            return yield* update(
-              input.sessionID,
-              ({ feed, pinned }) => {
-                const item =
-                  [...(feed?.items ?? []), ...(pinned ? [pinned] : [])].find(
-                    (item) => item.repository === requested.repository && item.number === requested.number,
-                  ) ?? requested
-                return {
-                  items: [...new Map([...(feed?.items ?? []), item].map((item) => [item.url, item])).values()],
-                  selected: item.url,
-                  note: "GitHub",
-                  ...(feed?.search ? { search: feed.search } : {}),
-                }
-              },
-              { reveal: true },
-            ).pipe(Effect.flatMap(required))
+            return yield* update(input.sessionID, (snapshot) => openView(snapshot, requested), { reveal: true }).pipe(
+              Effect.flatMap(required),
+            )
           }).pipe(Effect.mapError((error) => call.error("unavailable", errorMessage(error), {}))),
         search: (input, call) =>
           reader

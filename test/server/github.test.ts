@@ -59,6 +59,7 @@ testEffect(client("[]"))("rejects unsupported URLs and issue diffs before execut
 testEffect(
   client('{"items":[],"total_count":0,"incomplete_results":false}', (args) => {
     expect(args).toContain("q=repo:owner/repo is:open is:pr")
+    expect(args).toContain("per_page=50")
     expect(args).toContain("page=2")
   }),
 )("search applies the requested kind and page", () =>

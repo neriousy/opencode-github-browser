@@ -4,14 +4,14 @@ import { DEFAULT_THEME, resolveThemeDocument } from "@opencode-ai/theme/tui"
 import type { KeymapLayer } from "@opencode-ai/plugin/tui/context"
 import { testRender } from "@opentui/solid"
 import { BoxRenderable, ImageRenderable, Renderable, TextRenderable, TextAttributes } from "@opentui/core"
-import { createSignal } from "solid-js"
+import { createSignal, For, Show } from "solid-js"
 import { Effect, Layer, Schema } from "effect"
 import { createStore, produce } from "solid-js/store"
 import { Browser } from "../../src/tui/browser"
 import type { BrowserHost } from "../../src/tui/context"
-import { Kind, ReadResult, SearchPage, type Feed } from "../../src/shared/rpc"
+import { GitHub, Kind, ReadResult, SearchPage, Feed } from "../../src/shared/rpc"
 import { FeedStore, FeedStorage } from "../../src/server/store"
-import { readView, searchView } from "../../src/server/view"
+import { openView, readView, searchView } from "../../src/server/view"
 import { reference } from "../../src/shared/url"
 import { linkAt, registerLinks } from "../../src/tui/links"
 import { browserQueries, createQueryClient } from "../../src/tui/query"
@@ -38,12 +38,20 @@ function fixture(
   })
   const save = async (request: Request) => {
     const method = new URL(request.url).pathname.split("/").at(-1)
-    if (method !== "saveRead" && method !== "saveSearch") return response(request)
+    if (method !== "saveRead" && method !== "saveSearch" && method !== "open") return response(request)
     const input = await request.json()
     const result = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const store = yield* FeedStore
+          if (method === "open") {
+            const { input: data } = Schema.decodeUnknownSync(
+              Schema.Struct({ input: Schema.Struct({ sessionID: Schema.String, url: Schema.String }) }),
+            )(input)
+            return yield* store.update(data.sessionID, (snapshot) => openView(snapshot, reference(data.url)), {
+              reveal: true,
+            })
+          }
           if (method === "saveRead") {
             const { input: data } = Schema.decodeUnknownSync(
               Schema.Struct({ input: Schema.Struct({ sessionID: Schema.String, result: ReadResult }) }),
@@ -283,6 +291,7 @@ test("clicking a discussion reference and the keyboard picker preserve the Back 
     note: "",
     revision: 1,
     navigation: 1,
+    search: { query: "repo:owner/repo is:open", kind: "issue", page: 1, total: 1, incomplete: false },
   })
   const app = fixture(feed())
   const opened: string[] = []
@@ -291,7 +300,7 @@ test("clicking a discussion reference and the keyboard picker preserve the Back 
     // GitHub resolves an issue-number reference to its canonical PR identity.
     setFeed({
       ...feed(),
-      items: [item, pr],
+      detail: pr,
       selected: pr.url,
       revision: (feed().revision ?? 0) + 1,
       navigation: (feed().navigation ?? 0) + 1,
@@ -466,7 +475,12 @@ for (const width of [32, 100]) {
 
 test("image failure leaves readable text, retries on click, and Back cancels a pending image", async () => {
   const item = { ...issue, body: "Description text\n\n![Attachment](https://github.com/user-attachments/assets/test)" }
-  const feed = { items: [item], selected: null, note: "" }
+  const feed: Feed = {
+    items: [item],
+    selected: null,
+    note: "",
+    search: { query: "repo:owner/repo", kind: "issue", page: 1, total: 1, incomplete: false },
+  }
   const requests: Request[] = []
   const app = fixture(feed, async (request) => {
     requests.push(request)
@@ -508,7 +522,12 @@ test("image failure leaves readable text, retries on click, and Back cancels a p
 
 for (const width of [45, 110]) {
   test(`reader navigation and empty filters at ${width} columns`, async () => {
-    const feed = { items: [issue, pr], selected: null, note: "GitHub" }
+    const feed: Feed = {
+      items: [issue, pr],
+      selected: null,
+      note: "GitHub",
+      search: { query: "repo:owner/repo", kind: "all", page: 1, total: 2, incomplete: false },
+    }
     const app = fixture(feed)
     const rendered = await testRender(
       () => (
@@ -757,7 +776,14 @@ test("Escape leaves a cancelled bare reference idle until it is explicitly retri
 
 test("query cache refreshes cannot save a view or change the current selection", async () => {
   const cache = createQueryClient()
-  const feed = { items: [issue], selected: issue.url, note: "", revision: 1, navigation: 1 }
+  const feed: Feed = {
+    items: [issue],
+    selected: issue.url,
+    note: "",
+    revision: 1,
+    navigation: 1,
+    search: { query: "repo:owner/repo", kind: "issue", page: 1, total: 1, incomplete: false },
+  }
   const app = fixture(feed, async () => Response.json({ output: { part: "details", item: pr } }))
   const queries = browserQueries(cache, app.context.client)
   const rendered = await testRender(
@@ -1113,6 +1139,14 @@ test("rendering an agent's chat link never populates either cache; clicking it e
     note: "Repository results",
     revision: 1,
     navigation: 1,
+    search: {
+      query: "repo:owner/repo label:bug",
+      text: "label:bug",
+      kind: "issue",
+      page: 1,
+      total: 1,
+      incomplete: false,
+    },
   }
   const [feed, setFeed] = createSignal(initial)
   const paths: string[] = []
@@ -1144,9 +1178,10 @@ test("rendering an agent's chat link never populates either cache; clicking it e
     { width: 70, height: 28 },
   )
   const stop = registerLinks(rendered.renderer, (url) => {
-    const opened = { ...initial, items: [issue, reference(url)], selected: url, revision: 2, navigation: 2 }
-    app.values.set("browser.v2/ses_saved", { feed: opened, pinned: null })
-    setFeed(opened)
+    void app.context.client
+      .rpc(GitHub)
+      .open({ sessionID: "ses_saved", url }, { location: { directory: "/fixture" } })
+      .then(setFeed)
   })
   try {
     await rendered.waitForVisualIdle()
@@ -1165,12 +1200,130 @@ test("rendering an agent's chat link never populates either cache; clicking it e
     expect(cached).toHaveLength(1)
     expect(JSON.stringify(cached)).toContain(pr.url)
     expect(app.values.size).toBe(1)
+    await app.key("escape")
+    await rendered.waitForFrame((frame) => frame.includes("1 of 1"))
+    expect(rendered.captureCharFrame()).toContain(issue.title)
+    expect(rendered.captureCharFrame()).not.toContain(pr.title)
+    expect(paths).toEqual(["/api/rpc/github-browser/read"])
+    const saved = Schema.decodeUnknownSync(Schema.Struct({ feed: Feed }))(app.values.get("browser.v2/ses_saved"))
+    expect(saved.feed.items.map((item) => item.url)).toEqual([issue.url])
+    expect(saved.feed.search?.query).toBe("repo:owner/repo label:bug")
   } finally {
     stop()
     rendered.renderer.destroy()
     queryClient.clear()
   }
 })
+
+for (const width of [45, 110]) {
+  test(`a chat link in a new session returns to the normal 50-issue page at ${width} columns`, async () => {
+    const queryClient = createQueryClient()
+    const links = Array.from({ length: 10 }, (_, index) => ({
+      ...issue,
+      number: 900 + index,
+      url: `https://github.com/owner/repo/issues/${900 + index}`,
+      title: `Agent-linked issue ${900 + index}`,
+      body: `Details of linked issue ${900 + index}`,
+    }))
+    const rows = Array.from({ length: 50 }, (_, index) => ({
+      ...issue,
+      number: 100 + index,
+      url: `https://github.com/owner/repo/issues/${100 + index}`,
+      title: `Repository issue ${100 + index}`,
+    }))
+    const [feed, setFeed] = createSignal<Feed>()
+    const searches: unknown[] = []
+    const reads: string[] = []
+    const app = fixture({ items: [], selected: null, note: "" }, async (request) => {
+      const method = new URL(request.url).pathname.split("/").at(-1)
+      if (method === "read") {
+        const { input } = Schema.decodeUnknownSync(Schema.Struct({ input: Schema.Struct({ url: Schema.String }) }))(
+          await request.json(),
+        )
+        reads.push(input.url)
+        const item = links.find((item) => item.url === input.url)
+        if (!item) throw new Error("Unexpected detail read")
+        return Response.json({ output: { part: "details", item } })
+      }
+      if (method !== "search") throw new Error(`Unexpected request: ${method}`)
+      searches.push(await request.json())
+      return Response.json({
+        output: {
+          items: rows,
+          query: "repo:owner/repo is:open",
+          kind: "issue",
+          page: 1,
+          total: 120,
+          incomplete: false,
+        },
+      })
+    })
+    const open = async (url: string) => {
+      setFeed(
+        await app.context.client
+          .rpc(GitHub)
+          .open({ sessionID: "ses_new_chat", url }, { location: { directory: "/fixture" } }),
+      )
+    }
+    const rendered = await testRender(
+      () => (
+        <box height="100%">
+          <text flexShrink={0}>
+            <For each={links}>{(item) => <a href={item.url}>#{item.number} </a>}</For>
+          </text>
+          <Show when={feed()}>
+            <Browser
+              context={app.context}
+              feed={feed()}
+              queryClient={queryClient}
+              sessionID="ses_new_chat"
+              focused
+              width={width}
+              close={() => {}}
+              openURL={open}
+              openTab={async () => {}}
+            />
+          </Show>
+        </box>
+      ),
+      { width, height: 28 },
+    )
+    const stop = registerLinks(rendered.renderer, (url) => void open(url))
+    const saved = () =>
+      Schema.decodeUnknownSync(Schema.Struct({ feed: Feed }))(app.values.get("browser.v2/ses_new_chat")).feed
+    try {
+      await rendered.waitForVisualIdle()
+      expect(queryClient.getQueryCache().getAll()).toHaveLength(0)
+      await rendered.mockMouse.click(2, 0)
+      await rendered.waitForFrame((frame) => frame.includes("Details of linked issue 900"))
+      expect(saved().items).toEqual([])
+      expect(saved().detail?.url).toBe(links[0].url)
+      expect(searches).toEqual([])
+      // Follow another link and go Back through details before returning to results.
+      await open(links[1].url)
+      await rendered.waitForFrame((frame) => frame.includes("Details of linked issue 901"))
+      await app.key("escape")
+      await rendered.waitForFrame((frame) => frame.includes("Details of linked issue 900"))
+      expect(reads).toEqual([links[0].url, links[1].url])
+      await app.key("escape")
+      await rendered.waitForFrame((frame) => frame.includes("50 of 120"))
+      expect(searches).toEqual([{ input: { query: "is:open", kind: "issue", page: 1 } }])
+      expect(saved().items.map((item) => item.url)).toEqual(rows.map((item) => item.url))
+      expect(saved().detail).toBeUndefined()
+      expect(rendered.captureCharFrame()).toContain("Repository issue 100")
+      expect(rendered.captureCharFrame()).not.toContain("Agent-linked issue")
+      const cached = queryClient
+        .getQueryCache()
+        .getAll()
+        .find((query) => query.queryKey.includes("search"))
+      expect(cached?.state.data).toMatchObject({ pages: [{ items: rows }], pageParams: [1] })
+    } finally {
+      stop()
+      rendered.renderer.destroy()
+      queryClient.clear()
+    }
+  })
+}
 
 for (const width of [32, 45, 80]) {
   test(`refresh keeps saved rows below a separate loader at ${width} columns`, async () => {
@@ -1360,7 +1513,12 @@ test("Escape cancels the saved-view lookup and ignores its late reply", async ()
 })
 
 test("a failed first-open lookup stops loading and Retry restores the saved view", async () => {
-  const feed = { items: [pr], selected: null, note: "Repository results" }
+  const feed: Feed = {
+    items: [pr],
+    selected: null,
+    note: "Repository results",
+    search: { query: "repo:owner/repo", kind: "pr", page: 1, total: 1, incomplete: false },
+  }
   let count = 0
   const app = fixture(feed, async () =>
     ++count === 1

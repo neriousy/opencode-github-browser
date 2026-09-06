@@ -1,15 +1,30 @@
 {
   "name": "opencode-github-browser",
   "version": "0.1.0",
+  "description": "Browse GitHub issues, pull requests, discussions, and diffs inside the OpenCode 2 TUI.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/neriousy/opencode-github-browser.git"
+  },
+  "homepage": "https://github.com/neriousy/opencode-github-browser#readme",
+  "bugs": "https://github.com/neriousy/opencode-github-browser/issues",
+  "keywords": ["opencode", "opencode-plugin", "github", "tui"],
   "type": "module",
+  "files": ["index.ts", "rpc.ts", "src/server", "src/shared", "dist"],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "exports": {
     ".": "./index.ts",
-    "./tui": "./tui.tsx",
+    "./tui": "./dist/tui.js",
     "./rpc": "./rpc.ts"
   },
   "scripts": {
+    "build": "bun run scripts/build.ts",
+    "prepack": "bun run build",
     "typecheck": "tsgo --noEmit",
-    "prepare": "./scripts/prepare-effect.sh",
+    "effect:prepare": "./scripts/prepare-effect.sh",
     "test": "bun test ./test"
   },
   "dependencies": {

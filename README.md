@@ -2,29 +2,27 @@
 
 A GitHub reader inside OpenCode 2. Search issues and pull requests, follow links, read descriptions and discussions, and inspect diffs without leaving the TUI or starting a model turn.
 
-Browser search, details, discussion comments, and changed files load directly through **GitHub CLI (`gh`)** on the OpenCode server. These are read-only requests using `gh`'s existing authentication, without a model turn. Chat mentions and agent tool results never populate the browser or its caches. Press **t** to open a conversation about an item, then type in OpenCode's normal prompt.
+## Install from npm
 
-## Install locally
-
-Requires Bun, GitHub CLI, and OpenCode 2 beta. Tested against `0.0.0-beta-19157` and OpenTUI `0.5.10`. Authenticate `gh` on the machine running the OpenCode server (including when your TUI connects remotely):
-
-```sh
-gh auth login
-```
-
-```sh
-bun install
-```
-
-Add this repository's absolute path to the global `~/.config/opencode/opencode.jsonc`:
+Available on npm as [`opencode-github-browser`](https://www.npmjs.com/package/opencode-github-browser). Add it to `plugins` in your global `~/.config/opencode/opencode.jsonc` (or `$XDG_CONFIG_HOME/opencode/opencode.jsonc`):
 
 ```jsonc
 {
-  "plugins": ["/absolute/path/to/opencode-github-browser"],
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["opencode-github-browser@0.1.0"],
 }
 ```
 
-Alternatively, symlink the repository into `~/.config/opencode/plugins/github-browser` for automatic discovery. The package supplies both server and TUI entrypoints; it does not need a separate `cli.json` entry. Restart the background server with `opencode2 service restart`, then reopen the TUI if either was running before installation. Local source edits also require a restart in this beta: Bun caches imported plugin modules.
+Keep any existing plugin entries. OpenCode installs the package automatically, including its TUI plugin. Requires **OpenCode 2 beta** (tested with `0.0.0-beta-19157`) and **GitHub CLI** authenticated on the machine running the OpenCode server:
+
+```sh
+gh auth login
+opencode2 service restart
+```
+
+Reopen the TUI and run `/github` in a GitHub project.
+
+Browser search, details, discussion comments, and changed files load directly through **GitHub CLI (`gh`)** on the OpenCode server. These are read-only requests using `gh`'s existing authentication, without a model turn. Chat mentions and agent tool results never populate the browser or its caches. Press **t** to open a conversation about an item, then type in OpenCode's normal prompt.
 
 ## Use it
 
@@ -103,7 +101,11 @@ The server persists only the latest browser view and an explicitly pinned conver
 
 ## Development
 
+To work on the plugin source, clone this repository and run:
+
 ```sh
+bun install
+bun run build
 bun typecheck
 bun test
 ```
@@ -139,4 +141,18 @@ Server and TUI modules depend on shared contracts; shared code does not depend o
 
 Tests exercise the actual services, shared schemas, activation lifetime, and reader components at 45 and 110 columns. They use local fixtures and do not call GitHub or start model requests. Renderer captures are written to the ignored `captures/` directory.
 
-`bun install` runs `scripts/prepare-effect.sh`, which bootstraps an ignored Effect source checkout under `.repos/effect` for local research. It leaves an existing checkout unchanged. Runtime APIs are verified against the pinned installed Effect version.
+Optionally run `bun run effect:prepare` to bootstrap an ignored Effect source checkout under `.repos/effect` for local research. It leaves an existing checkout unchanged. Runtime APIs are verified against the pinned installed Effect version.
+
+### Publishing
+
+From this repository, run:
+
+```sh
+bun typecheck
+bun test
+npm pack --dry-run
+npm login
+npm publish
+```
+
+Packing or publishing automatically builds `dist/tui.js` with OpenTUI's Solid compiler. Runtime dependencies stay external so OpenCode can supply its shared TUI runtime. The npm package includes this compiled TUI entrypoint and the server/shared TypeScript source for the server and RPC entrypoints.
